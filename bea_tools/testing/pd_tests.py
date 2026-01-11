@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from pandas.sampler import Level, Feature, SamplingNode, TreeSampler
+from _pandas.sampler import Level, Feature, SamplingNode, TreeSampler
 
 
 # --- Fixtures ---

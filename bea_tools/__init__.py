@@ -1,1 +1,1 @@
-from pandas.sampler import TreeSampler
+from _pandas.sampler import TreeSampler
