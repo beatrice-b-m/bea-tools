@@ -1,19 +1,21 @@
 # Tests for pandas/sampler.py
 
-import pytest
-import pandas as pd
+from __future__ import annotations
+
 import random
 import sys
 import os
+import pandas as pd
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from pandas.sampler import Level, Feature, SamplingNode, GroupContainer
+from pandas.sampler import Level, Feature, SamplingNode, TreeSampler
 
 
 # --- Fixtures ---
 
 @pytest.fixture
-def sample_dataframe():
+def sample_dataframe() -> pd.DataFrame:
     """Creates a sample DataFrame for testing."""
     return pd.DataFrame({
         'empi_anon': ['P001', 'P002', 'P003', 'P004', 'P005',
@@ -26,7 +28,7 @@ def sample_dataframe():
 
 
 @pytest.fixture
-def multi_exam_dataframe():
+def multi_exam_dataframe() -> pd.DataFrame:
     """Creates a DataFrame with multiple exams per patient."""
     return pd.DataFrame({
         'empi_anon': ['P001', 'P001', 'P002', 'P002', 'P003',
@@ -43,9 +45,9 @@ def multi_exam_dataframe():
 class TestLevel:
     """Tests for the Level class."""
 
-    def test_query_equals_string(self):
+    def test_query_equals_string(self) -> None:
         """Query building for equals match type with string value."""
-        level = Level(
+        level: Level = Level(
             feature='gender',
             match_type='equals',
             name='M',
@@ -56,9 +58,9 @@ class TestLevel:
         )
         assert level.query == "gender == 'M'"
 
-    def test_query_equals_numeric(self):
+    def test_query_equals_numeric(self) -> None:
         """Query building for equals match type with numeric value."""
-        level = Level(
+        level: Level = Level(
             feature='age',
             match_type='equals',
             name=30,
@@ -69,9 +71,9 @@ class TestLevel:
         )
         assert level.query == "age == 30"
 
-    def test_query_contains(self):
+    def test_query_contains(self) -> None:
         """Query building for contains match type."""
-        level = Level(
+        level: Level = Level(
             feature='name',
             match_type='contains',
             name='John',
@@ -82,9 +84,9 @@ class TestLevel:
         )
         assert level.query == "name.str.contains('John')"
 
-    def test_query_between(self):
+    def test_query_between(self) -> None:
         """Query building for between match type with valid tuple."""
-        level = Level(
+        level: Level = Level(
             feature='age',
             match_type='between',
             name=(20, 30),
@@ -95,7 +97,7 @@ class TestLevel:
         )
         assert level.query == "(age > 20) & (age <= 30)"
 
-    def test_query_between_invalid_type(self):
+    def test_query_between_invalid_type(self) -> None:
         """Between match type with non-tuple should raise ValueError."""
         with pytest.raises(ValueError, match="Between match_type requires tuple"):
             Level(
@@ -108,12 +110,12 @@ class TestLevel:
                 label=None
             )
 
-    def test_query_unknown_match_type(self):
+    def test_query_unknown_match_type(self) -> None:
         """Unknown match type should raise ValueError."""
         with pytest.raises(ValueError, match="Unknown match_type"):
             Level(
                 feature='age',
-                match_type='invalid',
+                match_type='invalid',  # type: ignore[arg-type]
                 name=30,
                 weight=0.5,
                 count=None,
@@ -121,9 +123,9 @@ class TestLevel:
                 label=None
             )
 
-    def test_strict_and_resampling_weight(self):
+    def test_strict_and_resampling_weight(self) -> None:
         """Strict and resampling_weight attributes are set correctly."""
-        level = Level(
+        level: Level = Level(
             feature='gender',
             match_type='equals',
             name='M',
@@ -143,9 +145,9 @@ class TestLevel:
 class TestFeature:
     """Tests for the Feature class."""
 
-    def test_default_weight_distribution(self):
+    def test_default_weight_distribution(self) -> None:
         """When no weights provided, should distribute evenly."""
-        feature = Feature(
+        feature: Feature = Feature(
             name='gender',
             match_type='equals',
             levels=['M', 'F']
@@ -154,9 +156,9 @@ class TestFeature:
         assert feature.levels[0].weight == 0.5
         assert feature.levels[1].weight == 0.5
 
-    def test_explicit_weights(self):
+    def test_explicit_weights(self) -> None:
         """Explicit weights are passed correctly to levels."""
-        feature = Feature(
+        feature: Feature = Feature(
             name='category',
             match_type='equals',
             levels=['A', 'B', 'C'],
@@ -166,9 +168,9 @@ class TestFeature:
         assert feature.levels[1].weight == 0.3
         assert feature.levels[2].weight == 0.2
 
-    def test_label_generation(self):
+    def test_label_generation(self) -> None:
         """Labels are generated when label_col is set."""
-        feature = Feature(
+        feature: Feature = Feature(
             name='gender',
             match_type='equals',
             levels=['M', 'F'],
@@ -177,9 +179,9 @@ class TestFeature:
         assert feature.levels[0].label == 'M'
         assert feature.levels[1].label == 'F'
 
-    def test_strict_propagation(self):
+    def test_strict_propagation(self) -> None:
         """Strict flag propagates to child levels."""
-        feature = Feature(
+        feature: Feature = Feature(
             name='gender',
             match_type='equals',
             levels=['M', 'F'],
@@ -188,9 +190,9 @@ class TestFeature:
         assert feature.levels[0].strict is True
         assert feature.levels[1].strict is True
 
-    def test_resampling_weight_propagation(self):
+    def test_resampling_weight_propagation(self) -> None:
         """Resampling weight propagates to child levels."""
-        feature = Feature(
+        feature: Feature = Feature(
             name='gender',
             match_type='equals',
             levels=['M', 'F'],
@@ -199,9 +201,9 @@ class TestFeature:
         assert feature.levels[0].resampling_weight == 2.5
         assert feature.levels[1].resampling_weight == 2.5
 
-    def test_conditional_weights_lookup(self):
+    def test_conditional_weights_lookup(self) -> None:
         """Conditional weights lookup is constructed correctly."""
-        feature = Feature(
+        feature: Feature = Feature(
             name='category',
             match_type='equals',
             levels=['A', 'B'],
@@ -223,9 +225,9 @@ class TestFeature:
 class TestSamplingNode:
     """Tests for the SamplingNode class."""
 
-    def test_is_leaf_true(self, sample_dataframe):
+    def test_is_leaf_true(self, sample_dataframe: pd.DataFrame) -> None:
         """Node with no children is a leaf."""
-        node = SamplingNode(
+        node: SamplingNode = SamplingNode(
             name='test',
             data=sample_dataframe,
             target_n=5,
@@ -235,9 +237,9 @@ class TestSamplingNode:
         )
         assert node.is_leaf is True
 
-    def test_is_leaf_false(self, sample_dataframe):
+    def test_is_leaf_false(self, sample_dataframe: pd.DataFrame) -> None:
         """Node with children is not a leaf."""
-        parent = SamplingNode(
+        parent: SamplingNode = SamplingNode(
             name='parent',
             data=sample_dataframe,
             target_n=5,
@@ -245,7 +247,7 @@ class TestSamplingNode:
             single_per_patient=True,
             route={}
         )
-        child = SamplingNode(
+        child: SamplingNode = SamplingNode(
             name='child',
             data=sample_dataframe.head(3),
             target_n=2,
@@ -256,9 +258,9 @@ class TestSamplingNode:
         parent.add_child(child)
         assert parent.is_leaf is False
 
-    def test_excess_n_calculation(self, sample_dataframe):
+    def test_excess_n_calculation(self, sample_dataframe: pd.DataFrame) -> None:
         """Excess is calculated as capacity minus target."""
-        node = SamplingNode(
+        node: SamplingNode = SamplingNode(
             name='test',
             data=sample_dataframe,
             target_n=3,
@@ -269,9 +271,9 @@ class TestSamplingNode:
         assert node.capacity == 10
         assert node.excess_n == 7
 
-    def test_balance_leaf_sufficient_capacity(self, sample_dataframe):
+    def test_balance_leaf_sufficient_capacity(self, sample_dataframe: pd.DataFrame) -> None:
         """Leaf with sufficient capacity returns zero deficit."""
-        node = SamplingNode(
+        node: SamplingNode = SamplingNode(
             name='test',
             data=sample_dataframe,
             target_n=5,
@@ -279,13 +281,13 @@ class TestSamplingNode:
             single_per_patient=True,
             route={}
         )
-        deficit = node.balance()
+        deficit: int = node.balance()
         assert deficit == 0
         assert node.target_n == 5
 
-    def test_balance_leaf_with_deficit(self, sample_dataframe):
+    def test_balance_leaf_with_deficit(self, sample_dataframe: pd.DataFrame) -> None:
         """Leaf with deficit clips target and returns deficit amount."""
-        node = SamplingNode(
+        node: SamplingNode = SamplingNode(
             name='test',
             data=sample_dataframe,
             target_n=15,
@@ -293,13 +295,13 @@ class TestSamplingNode:
             single_per_patient=True,
             route={}
         )
-        deficit = node.balance()
+        deficit: int = node.balance()
         assert deficit == 5
         assert node.target_n == 10
 
-    def test_balance_hierarchical_spillover(self, sample_dataframe):
+    def test_balance_hierarchical_spillover(self, sample_dataframe: pd.DataFrame) -> None:
         """Deficit is redistributed to wealthy siblings."""
-        parent = SamplingNode(
+        parent: SamplingNode = SamplingNode(
             name='parent',
             data=sample_dataframe,
             target_n=10,
@@ -309,8 +311,8 @@ class TestSamplingNode:
         )
 
         # Child 1: has deficit (target 8, capacity 5)
-        df_males = sample_dataframe[sample_dataframe['gender'] == 'M']
-        child1 = SamplingNode(
+        df_males: pd.DataFrame = sample_dataframe[sample_dataframe['gender'] == 'M']
+        child1: SamplingNode = SamplingNode(
             name='child1',
             data=df_males,
             target_n=8,
@@ -320,8 +322,8 @@ class TestSamplingNode:
         )
 
         # Child 2: has surplus (target 2, capacity 5)
-        df_females = sample_dataframe[sample_dataframe['gender'] == 'F']
-        child2 = SamplingNode(
+        df_females: pd.DataFrame = sample_dataframe[sample_dataframe['gender'] == 'F']
+        child2: SamplingNode = SamplingNode(
             name='child2',
             data=df_females,
             target_n=2,
@@ -333,16 +335,16 @@ class TestSamplingNode:
         parent.add_child(child1)
         parent.add_child(child2)
 
-        deficit = parent.balance()
+        deficit: int = parent.balance()
 
         # Child1 had deficit of 3, child2 should absorb it
         assert child1.target_n == 5
         assert child2.target_n == 5
         assert deficit == 0
 
-    def test_balance_respects_strict_nodes(self, sample_dataframe):
+    def test_balance_respects_strict_nodes(self, sample_dataframe: pd.DataFrame) -> None:
         """Strict nodes don't receive spillover."""
-        parent = SamplingNode(
+        parent: SamplingNode = SamplingNode(
             name='parent',
             data=sample_dataframe,
             target_n=10,
@@ -351,8 +353,8 @@ class TestSamplingNode:
             route={}
         )
 
-        df_males = sample_dataframe[sample_dataframe['gender'] == 'M']
-        child1 = SamplingNode(
+        df_males: pd.DataFrame = sample_dataframe[sample_dataframe['gender'] == 'M']
+        child1: SamplingNode = SamplingNode(
             name='child1',
             data=df_males,
             target_n=8,
@@ -361,8 +363,8 @@ class TestSamplingNode:
             route={}
         )
 
-        df_females = sample_dataframe[sample_dataframe['gender'] == 'F']
-        child2 = SamplingNode(
+        df_females: pd.DataFrame = sample_dataframe[sample_dataframe['gender'] == 'F']
+        child2: SamplingNode = SamplingNode(
             name='child2',
             data=df_females,
             target_n=2,
@@ -375,15 +377,15 @@ class TestSamplingNode:
         parent.add_child(child1)
         parent.add_child(child2)
 
-        deficit = parent.balance()
+        deficit: int = parent.balance()
 
         # Child2 is strict, cannot absorb spillover
         assert child2.target_n == 2
         assert deficit == 3
 
-    def test_absorb_surplus_strict_does_nothing(self, sample_dataframe):
+    def test_absorb_surplus_strict_does_nothing(self, sample_dataframe: pd.DataFrame) -> None:
         """Absorb surplus does nothing if node is strict."""
-        node = SamplingNode(
+        node: SamplingNode = SamplingNode(
             name='test',
             data=sample_dataframe,
             target_n=5,
@@ -392,13 +394,13 @@ class TestSamplingNode:
             route={},
             strict=True
         )
-        original_target = node.target_n
+        original_target: int = node.target_n
         node.absorb_surplus(3)
         assert node.target_n == original_target
 
-    def test_collect_leaves_single_leaf(self, sample_dataframe):
+    def test_collect_leaves_single_leaf(self, sample_dataframe: pd.DataFrame) -> None:
         """Collect leaves returns self for single node."""
-        node = SamplingNode(
+        node: SamplingNode = SamplingNode(
             name='test',
             data=sample_dataframe,
             target_n=5,
@@ -406,13 +408,13 @@ class TestSamplingNode:
             single_per_patient=True,
             route={}
         )
-        leaves = node.collect_leaves()
+        leaves: list[SamplingNode] = node.collect_leaves()
         assert len(leaves) == 1
         assert leaves[0] == node
 
-    def test_collect_leaves_tree(self, sample_dataframe):
+    def test_collect_leaves_tree(self, sample_dataframe: pd.DataFrame) -> None:
         """Collect leaves returns all leaf nodes from tree."""
-        parent = SamplingNode(
+        parent: SamplingNode = SamplingNode(
             name='parent',
             data=sample_dataframe,
             target_n=10,
@@ -421,7 +423,7 @@ class TestSamplingNode:
             route={}
         )
 
-        child1 = SamplingNode(
+        child1: SamplingNode = SamplingNode(
             name='child1',
             data=sample_dataframe.head(5),
             target_n=5,
@@ -429,7 +431,7 @@ class TestSamplingNode:
             single_per_patient=True,
             route={}
         )
-        child2 = SamplingNode(
+        child2: SamplingNode = SamplingNode(
             name='child2',
             data=sample_dataframe.tail(5),
             target_n=5,
@@ -441,14 +443,14 @@ class TestSamplingNode:
         parent.add_child(child1)
         parent.add_child(child2)
 
-        leaves = parent.collect_leaves()
+        leaves: list[SamplingNode] = parent.collect_leaves()
         assert len(leaves) == 2
         assert child1 in leaves
         assert child2 in leaves
 
-    def test_refresh_ids_excludes_patients(self, sample_dataframe):
+    def test_refresh_ids_excludes_patients(self, sample_dataframe: pd.DataFrame) -> None:
         """Refresh IDs excludes used patients from capacity."""
-        node = SamplingNode(
+        node: SamplingNode = SamplingNode(
             name='test',
             data=sample_dataframe,
             target_n=5,
@@ -457,7 +459,7 @@ class TestSamplingNode:
             route={}
         )
 
-        original_capacity = node.capacity
+        original_capacity: int = node.capacity
         node.refresh_ids(['P001', 'P002', 'P003'])
 
         assert node.capacity == original_capacity - 3
@@ -465,9 +467,9 @@ class TestSamplingNode:
         assert 'P002' not in node.ids
         assert 'P003' not in node.ids
 
-    def test_sample_returns_correct_count(self, sample_dataframe):
+    def test_sample_returns_correct_count(self, sample_dataframe: pd.DataFrame) -> None:
         """Sample returns the correct number of rows."""
-        node = SamplingNode(
+        node: SamplingNode = SamplingNode(
             name='test',
             data=sample_dataframe,
             target_n=5,
@@ -476,14 +478,14 @@ class TestSamplingNode:
             route={}
         )
 
-        rng = random.Random(42)
-        result = node.sample(rng)
+        rng: random.Random = random.Random(42)
+        result: pd.DataFrame = node.sample(rng)
 
         assert len(result) == 5
 
-    def test_sample_single_per_patient_dedup(self, multi_exam_dataframe):
+    def test_sample_single_per_patient_dedup(self, multi_exam_dataframe: pd.DataFrame) -> None:
         """Sample with single_per_patient deduplicates by patient."""
-        node = SamplingNode(
+        node: SamplingNode = SamplingNode(
             name='test',
             data=multi_exam_dataframe,
             target_n=3,
@@ -492,15 +494,15 @@ class TestSamplingNode:
             route={}
         )
 
-        rng = random.Random(42)
-        result = node.sample(rng)
+        rng: random.Random = random.Random(42)
+        result: pd.DataFrame = node.sample(rng)
 
         # Should have no duplicate patients
         assert result['empi_anon'].nunique() == len(result)
 
-    def test_sample_empty_target(self, sample_dataframe):
+    def test_sample_empty_target(self, sample_dataframe: pd.DataFrame) -> None:
         """Sample with zero target returns empty DataFrame."""
-        node = SamplingNode(
+        node: SamplingNode = SamplingNode(
             name='test',
             data=sample_dataframe,
             target_n=0,
@@ -509,24 +511,24 @@ class TestSamplingNode:
             route={}
         )
 
-        rng = random.Random(42)
-        result = node.sample(rng)
+        rng: random.Random = random.Random(42)
+        result: pd.DataFrame = node.sample(rng)
 
         assert len(result) == 0
 
 
-# --- GroupContainer Class Tests ---
+# --- TreeSampler Class Tests ---
 
-class TestGroupContainer:
-    """Tests for the GroupContainer class."""
+class TestTreeSampler:
+    """Tests for the TreeSampler class."""
 
-    def test_sample_data_end_to_end(self, sample_dataframe):
+    def test_sample_data_end_to_end(self, sample_dataframe: pd.DataFrame) -> None:
         """End-to-end sampling builds tree, balances, and returns valid sample."""
-        features = [
+        features: list[Feature] = [
             Feature(name='gender', match_type='equals', levels=['M', 'F'])
         ]
 
-        container = GroupContainer(
+        sampler: TreeSampler = TreeSampler(
             n=6,
             features=features,
             seed=42,
@@ -534,18 +536,18 @@ class TestGroupContainer:
             single_per_patient=True
         )
 
-        result = container.sample_data(sample_dataframe)
+        result: pd.DataFrame = sampler.sample_data(sample_dataframe)
 
         assert len(result) == 6
         assert all(col in result.columns for col in sample_dataframe.columns)
 
-    def test_sample_size_conservation(self, sample_dataframe):
+    def test_sample_size_conservation(self, sample_dataframe: pd.DataFrame) -> None:
         """Total sampled is less than or equal to requested n."""
-        features = [
+        features: list[Feature] = [
             Feature(name='gender', match_type='equals', levels=['M', 'F'])
         ]
 
-        container = GroupContainer(
+        sampler: TreeSampler = TreeSampler(
             n=8,
             features=features,
             seed=42,
@@ -553,17 +555,17 @@ class TestGroupContainer:
             single_per_patient=True
         )
 
-        result = container.sample_data(sample_dataframe)
+        result: pd.DataFrame = sampler.sample_data(sample_dataframe)
 
         assert len(result) <= 8
 
-    def test_single_per_patient_constraint(self, multi_exam_dataframe):
+    def test_single_per_patient_constraint(self, multi_exam_dataframe: pd.DataFrame) -> None:
         """No duplicate patient IDs in final output."""
-        features = [
+        features: list[Feature] = [
             Feature(name='gender', match_type='equals', levels=['M', 'F'])
         ]
 
-        container = GroupContainer(
+        sampler: TreeSampler = TreeSampler(
             n=4,
             features=features,
             seed=42,
@@ -571,17 +573,17 @@ class TestGroupContainer:
             single_per_patient=True
         )
 
-        result = container.sample_data(multi_exam_dataframe)
+        result: pd.DataFrame = sampler.sample_data(multi_exam_dataframe)
 
         assert result['empi_anon'].nunique() == len(result)
 
-    def test_seed_reproducibility(self, sample_dataframe):
+    def test_seed_reproducibility(self, sample_dataframe: pd.DataFrame) -> None:
         """Same seed produces same sample."""
-        features = [
+        features: list[Feature] = [
             Feature(name='gender', match_type='equals', levels=['M', 'F'])
         ]
 
-        container1 = GroupContainer(
+        sampler1: TreeSampler = TreeSampler(
             n=5,
             features=features,
             seed=42,
@@ -589,7 +591,7 @@ class TestGroupContainer:
             single_per_patient=True
         )
 
-        container2 = GroupContainer(
+        sampler2: TreeSampler = TreeSampler(
             n=5,
             features=features,
             seed=42,
@@ -597,21 +599,21 @@ class TestGroupContainer:
             single_per_patient=True
         )
 
-        result1 = container1.sample_data(sample_dataframe.copy())
-        result2 = container2.sample_data(sample_dataframe.copy())
+        result1: pd.DataFrame = sampler1.sample_data(sample_dataframe.copy())
+        result2: pd.DataFrame = sampler2.sample_data(sample_dataframe.copy())
 
         pd.testing.assert_frame_equal(
             result1.sort_values('empi_anon').reset_index(drop=True),
             result2.sort_values('empi_anon').reset_index(drop=True)
         )
 
-    def test_empty_data_handling(self):
+    def test_empty_data_handling(self) -> None:
         """Returns empty DataFrame when given empty data."""
-        features = [
+        features: list[Feature] = [
             Feature(name='gender', match_type='equals', levels=['M', 'F'])
         ]
 
-        container = GroupContainer(
+        sampler: TreeSampler = TreeSampler(
             n=5,
             features=features,
             seed=42,
@@ -619,24 +621,24 @@ class TestGroupContainer:
             single_per_patient=True
         )
 
-        empty_df = pd.DataFrame({
+        empty_df: pd.DataFrame = pd.DataFrame({
             'empi_anon': [],
             'gender': [],
             'studydate_anon': []
         })
 
-        result = container.sample_data(empty_df)
+        result: pd.DataFrame = sampler.sample_data(empty_df)
 
         assert len(result) == 0
 
-    def test_multiple_features(self, sample_dataframe):
+    def test_multiple_features(self, sample_dataframe: pd.DataFrame) -> None:
         """Sampling works with multiple stratification features."""
-        features = [
+        features: list[Feature] = [
             Feature(name='gender', match_type='equals', levels=['M', 'F']),
             Feature(name='category', match_type='equals', levels=['A', 'B'])
         ]
 
-        container = GroupContainer(
+        sampler: TreeSampler = TreeSampler(
             n=8,
             features=features,
             seed=42,
@@ -644,7 +646,7 @@ class TestGroupContainer:
             single_per_patient=True
         )
 
-        result = container.sample_data(sample_dataframe)
+        result: pd.DataFrame = sampler.sample_data(sample_dataframe)
 
         assert len(result) <= 8
         assert result['empi_anon'].nunique() == len(result)
@@ -655,9 +657,9 @@ class TestGroupContainer:
 class TestEdgeCases:
     """Tests for edge cases and boundary conditions."""
 
-    def test_single_level_feature(self, sample_dataframe):
+    def test_single_level_feature(self) -> None:
         """Single level in a feature works correctly."""
-        feature = Feature(
+        feature: Feature = Feature(
             name='gender',
             match_type='equals',
             levels=['M']
@@ -666,13 +668,13 @@ class TestEdgeCases:
         assert len(feature.levels) == 1
         assert feature.levels[0].weight == 1.0
 
-    def test_target_exceeds_capacity(self, sample_dataframe):
+    def test_target_exceeds_capacity(self, sample_dataframe: pd.DataFrame) -> None:
         """Target exceeding capacity clips to available."""
-        features = [
+        features: list[Feature] = [
             Feature(name='gender', match_type='equals', levels=['M', 'F'])
         ]
 
-        container = GroupContainer(
+        sampler: TreeSampler = TreeSampler(
             n=100,
             features=features,
             seed=42,
@@ -680,14 +682,14 @@ class TestEdgeCases:
             single_per_patient=True
         )
 
-        result = container.sample_data(sample_dataframe)
+        result: pd.DataFrame = sampler.sample_data(sample_dataframe)
 
         # Should get at most the total unique patients
         assert len(result) <= 10
 
-    def test_all_strict_nodes(self, sample_dataframe):
+    def test_all_strict_nodes(self, sample_dataframe: pd.DataFrame) -> None:
         """All strict nodes means no spillover possible."""
-        features = [
+        features: list[Feature] = [
             Feature(
                 name='gender',
                 match_type='equals',
@@ -696,7 +698,7 @@ class TestEdgeCases:
             )
         ]
 
-        container = GroupContainer(
+        sampler: TreeSampler = TreeSampler(
             n=10,
             features=features,
             seed=42,
@@ -705,12 +707,12 @@ class TestEdgeCases:
         )
 
         # Should still work, just without spillover
-        result = container.sample_data(sample_dataframe)
+        result: pd.DataFrame = sampler.sample_data(sample_dataframe)
         assert len(result) <= 10
 
-    def test_zero_weight_level(self, sample_dataframe):
+    def test_zero_weight_level(self, sample_dataframe: pd.DataFrame) -> None:
         """Zero weight level gets no samples."""
-        features = [
+        features: list[Feature] = [
             Feature(
                 name='gender',
                 match_type='equals',
@@ -719,7 +721,7 @@ class TestEdgeCases:
             )
         ]
 
-        container = GroupContainer(
+        sampler: TreeSampler = TreeSampler(
             n=5,
             features=features,
             seed=42,
@@ -727,20 +729,16 @@ class TestEdgeCases:
             single_per_patient=True
         )
 
-        result = container.sample_data(sample_dataframe)
+        result: pd.DataFrame = sampler.sample_data(sample_dataframe)
 
         # All samples should be male (or close to it due to remainder logic)
         assert len(result) <= 5
 
-    def test_node_repr(self):
+    def test_node_repr(self, sample_dataframe: pd.DataFrame) -> None:
         """Node __repr__ returns expected format."""
-        df = pd.DataFrame({
-            'empi_anon': ['P001', 'P002'],
-            'studydate_anon': pd.date_range('2020-01-01', periods=2)
-        })
-        node = SamplingNode(
+        node: SamplingNode = SamplingNode(
             name='test_node',
-            data=df,
+            data=sample_dataframe,
             target_n=5,
             count_col='empi_anon',
             single_per_patient=True,
@@ -748,7 +746,7 @@ class TestEdgeCases:
             strict=True
         )
 
-        repr_str = repr(node)
+        repr_str: str = repr(node)
         assert 'test_node' in repr_str
         assert 'Target: 5' in repr_str
         assert 'Strict: True' in repr_str
