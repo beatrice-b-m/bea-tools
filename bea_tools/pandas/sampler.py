@@ -365,7 +365,7 @@ class SamplingNode:
 
 # --- Main Controller ---
 
-class GroupContainer:
+class TreeSampler:
     """Orchestrates the stratified sampling process.
 
     Builds the tree, balances targets, and executes the greedy sampling.
