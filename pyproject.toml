@@ -1,0 +1,14 @@
+# allows the package to be installed in editable mode
+[build-system]
+requires = ["setuptools>=64", "setuptools_scm>=8", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bea-tools"
+dynamic = ["version"]
+
+dependencies = [
+    "pandas >= 2.2",
+]
+
+[tool.setuptools_scm]
