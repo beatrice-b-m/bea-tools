@@ -1,6 +1,6 @@
 # bea-tools
 
-**Tools made by, and for, Bea**
+**🐝 𝓉𝑜𝑜𝓁𝓈 𝓂𝒶𝒹𝑒 𝒷𝓎, 𝒶𝓃𝒹 𝒻𝑜𝓇, 𝒷𝑒𝒶 🐝**
 
 A Python package of random functions and tools that I use regularly. Data science/analysis focused since I'm a data scientist c:
 
