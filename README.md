@@ -25,6 +25,35 @@ A hierarchical stratified sampling tool for pandas DataFrames. Designed for scen
 - **Strict mode**: Lock specific strata to prevent them from absorbing spillover
 - **Single-per-entity sampling**: Ensure unique entities (e.g., one exam per patient)
 
+### DicomComparer
+
+A tool for comparing two DICOM files at the attribute level. Identifies which attributes are shared between files, which are exclusive to each, and whether shared attributes have matching or conflicting values.
+
+**Key capabilities:**
+
+- **Attribute overlap analysis**: Identify which DICOM tags exist in both files vs. exclusive to one
+- **Value comparison**: For shared attributes, detect matches and conflicts
+- **Flexible input**: Pass files directly or as a labeled dictionary
+- **Summary output**: Generate formatted comparison reports
+
+```python
+import pydicom
+from bea_tools._dicom.dicomp import DicomComparer
+
+dcm1 = pydicom.dcmread("path/to/first.dcm")
+dcm2 = pydicom.dcmread("path/to/second.dcm")
+
+comparer = DicomComparer(dcm1, dcm2)
+comparison = comparer.compare()
+
+# Print summary statistics
+comparison.summary()
+
+# Access specific conflicts
+for conflict in comparison.intersection.comparison.conflicts:
+    print(conflict)
+```
+
 ## Quick Start
 
 ```python
@@ -114,6 +143,7 @@ category_feature = Feature(
 
 - Python 3.10+
 - pandas >= 2.2
+- pydicom (for DICOM utilities)
 
 ## License
 

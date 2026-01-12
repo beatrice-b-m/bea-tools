@@ -314,46 +314,177 @@ class FileComparison:
     def __repr__(self) -> str:
         return f"FileComparison(intersection: {self.intersection.n}, 1: {self.exclusive_to_1.n}, 2: {self.exclusive_to_2.n})"
 
+    def _make_bar(self, value: int, total: int, width: int = 30, fill: str = "█", empty: str = "░") -> str:
+        """Creates an ASCII progress bar.
+
+        Args:
+            value: Current value to represent.
+            total: Maximum value (100%).
+            width: Character width of the bar.
+            fill: Character for filled portion.
+            empty: Character for empty portion.
+
+        Returns:
+            ASCII bar string.
+        """
+        if total == 0:
+            return empty * width
+        filled: int = int((value / total) * width)
+        return fill * filled + empty * (width - filled)
+
+    def _make_comparison_bar(self, excl1: int, shared: int, excl2: int, width: int = 40) -> list[str]:
+        """Creates a visual comparison bar showing overlap between two files.
+
+        Args:
+            excl1: Count exclusive to file 1.
+            shared: Count shared between files.
+            excl2: Count exclusive to file 2.
+            width: Character width of the bar.
+
+        Returns:
+            List of strings forming the visual comparison.
+        """
+        total: int = excl1 + shared + excl2
+        if total == 0:
+            return ["No attributes to compare"]
+
+        w1: int = max(1, int((excl1 / total) * width)) if excl1 > 0 else 0
+        ws: int = max(1, int((shared / total) * width)) if shared > 0 else 0
+        w2: int = max(1, int((excl2 / total) * width)) if excl2 > 0 else 0
+
+        # Adjust to exactly match width
+        diff: int = width - (w1 + ws + w2)
+        if diff != 0:
+            if ws > 0:
+                ws += diff
+            elif w1 > 0:
+                w1 += diff
+            else:
+                w2 += diff
+
+        bar: str = "─" * w1 + "═" * ws + "─" * w2
+
+        # Build indicator line
+        indicators: str = ""
+        if w1 > 0:
+            indicators += "1" + " " * (w1 - 1)
+        if ws > 0:
+            mid: int = ws // 2
+            indicators += " " * mid + "∩" + " " * (ws - mid - 1)
+        if w2 > 0:
+            indicators += " " * (w2 - 1) + "2"
+
+        return [
+            f"    ┌{'─' * width}┐",
+            f"    │{bar}│",
+            f"    └{'─' * width}┘",
+            f"     {indicators}",
+        ]
+
     def summary(self) -> None:
-        """Prints a formatted summary of the comparison results."""
+        """Prints a formatted visual summary of the comparison results."""
         n_inter: int = self.intersection.n
         n_excl1: int = self.exclusive_to_1.n
         n_excl2: int = self.exclusive_to_2.n
         n1: int = n_inter + n_excl1
         n2: int = n_inter + n_excl2
+        n_total: int = n_excl1 + n_inter + n_excl2
 
-        inter_str: str = f"{n_inter/n1:.1%}"
-        if n1 != n2:
-            inter_str += f", {n_inter/n2:.1%}"
-
-        segments: list[str] = [
-            "Comparison Summary:",
-            " - Attribute Overlap:",
-            f"    - DICOM #1: {n1} attributes",
-            f"    - DICOM #2: {n2} attributes",
-            f"    - {n_inter:,d} ({inter_str}) attributes exist in both files",
-            f"    - {n_excl1} ({n_excl1/n1:.1%}) attributes only exist in DICOM #1",
-            f"    - {n_excl2} ({n_excl2/n2:.1%}) attributes only exist in DICOM #2",
+        lines: list[str] = [
+            "",
+            "╔══════════════════════════════════════════════════════════════╗",
+            "║                   DICOM COMPARISON SUMMARY                   ║",
+            "╚══════════════════════════════════════════════════════════════╝",
+            "",
         ]
 
+        # Attribute overview table
+        lines += [
+            "┌─────────────────────────────────────────────────────────────┐",
+            "│  ATTRIBUTE OVERVIEW                                         │",
+            "├─────────────────────────────────────────────────────────────┤",
+            f"│  DICOM #1 total attributes:  {n1:>6,d}                         │",
+            f"│  DICOM #2 total attributes:  {n2:>6,d}                         │",
+            "└─────────────────────────────────────────────────────────────┘",
+            "",
+        ]
+
+        # Visual overlap representation
+        lines += [
+            "  ATTRIBUTE OVERLAP VISUALIZATION",
+            "  ─────────────────────────────────",
+            "",
+            "    DICOM #1 only ─────┬───── Shared ─────┬───── DICOM #2 only",
+        ]
+        lines += self._make_comparison_bar(n_excl1, n_inter, n_excl2)
+        lines += [""]
+
+        # Overlap statistics table
+        pct1_inter: float = (n_inter / n1 * 100) if n1 > 0 else 0
+        pct2_inter: float = (n_inter / n2 * 100) if n2 > 0 else 0
+        pct1_excl: float = (n_excl1 / n1 * 100) if n1 > 0 else 0
+        pct2_excl: float = (n_excl2 / n2 * 100) if n2 > 0 else 0
+
+        lines += [
+            "┌───────────────────┬──────────┬─────────────┬─────────────────────────────────┐",
+            "│ Category          │   Count  │  % of File  │ Distribution                    │",
+            "├───────────────────┼──────────┼─────────────┼─────────────────────────────────┤",
+            f"│ Shared            │  {n_inter:>6,d}  │ {pct1_inter:>5.1f}%/{pct2_inter:<5.1f}%│ {self._make_bar(n_inter, n_total, 30, '█', '░')} │",
+            f"│ DICOM #1 only     │  {n_excl1:>6,d}  │ {pct1_excl:>5.1f}%      │ {self._make_bar(n_excl1, n_total, 30, '▓', '░')} │",
+            f"│ DICOM #2 only     │  {n_excl2:>6,d}  │ {pct2_excl:>5.1f}%      │ {self._make_bar(n_excl2, n_total, 30, '▒', '░')} │",
+            "└───────────────────┴──────────┴─────────────┴─────────────────────────────────┘",
+            "",
+        ]
+
+        # Value comparison section (only if there are shared attributes)
         if n_inter > 0:
             n_matches: int = self.intersection.comparison.n_matches
             n_conflicts: int = self.intersection.comparison.n_conflicts
+            pct_match: float = (n_matches / n_inter * 100) if n_inter > 0 else 0
+            pct_conflict: float = (n_conflicts / n_inter * 100) if n_inter > 0 else 0
 
-            match_str: str = f"{n_matches/n1:.1%}"
-            confl_str: str = f"{n_conflicts/n1:.1%}"
-            if n1 != n2:
-                match_str += f", {n_matches/n2:.1%}"
-                confl_str += f", {n_conflicts/n2:.1%}"
-
-            segments += [
-                " - Intersection Comparison:",
-                f"    - {n_inter:,d} ({inter_str}) attributes exist in both files",
-                f"    - {n_matches:,d} ({match_str}) matching attributes",
-                f"    - {n_conflicts:,d} ({confl_str}) conflicting attributes",
+            lines += [
+                "┌─────────────────────────────────────────────────────────────┐",
+                "│  VALUE COMPARISON (Shared Attributes)                       │",
+                "├─────────────────────────────────────────────────────────────┤",
             ]
 
-        print("\n".join(segments))
+            # Match/conflict bar
+            match_bar: str = self._make_bar(n_matches, n_inter, 40, "✓", " ")
+            conflict_bar: str = self._make_bar(n_conflicts, n_inter, 40, "✗", " ")
+
+            lines += [
+                f"│                                                             │",
+                f"│  Matching values:    {n_matches:>6,d} ({pct_match:>5.1f}%)                      │",
+                f"│  [{match_bar}]   │",
+                f"│                                                             │",
+                f"│  Conflicting values: {n_conflicts:>6,d} ({pct_conflict:>5.1f}%)                      │",
+                f"│  [{conflict_bar}]   │",
+                f"│                                                             │",
+                "└─────────────────────────────────────────────────────────────┘",
+                "",
+            ]
+
+            # Summary verdict
+            if n_conflicts == 0:
+                verdict: str = "✓ All shared attributes have matching values!"
+                verdict_style: str = "SUCCESS"
+            elif pct_conflict < 10:
+                verdict = f"⚠ Minor differences: {n_conflicts} conflicting attribute(s)"
+                verdict_style = "WARNING"
+            else:
+                verdict = f"✗ Significant differences: {n_conflicts} conflicting attribute(s)"
+                verdict_style = "ALERT"
+
+            lines += [
+                "┌─────────────────────────────────────────────────────────────┐",
+                f"│  {verdict_style:^59}  │",
+                f"│  {verdict:<59}  │",
+                "└─────────────────────────────────────────────────────────────┘",
+            ]
+
+        lines += [""]
+        print("\n".join(lines))
 
 
 # --- DICOM Wrapper ---
