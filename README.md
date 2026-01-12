@@ -2,7 +2,7 @@
 
 **Tools made by, and for, Bea**
 
-A Python package of random functions and tools that I use regularly. Data science/analysis focused since, ya know, I'm a data scientist c:
+A Python package of random functions and tools that I use regularly. Data science/analysis focused since I'm a data scientist c:
 
 ## Installation
 
