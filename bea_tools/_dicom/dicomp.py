@@ -13,9 +13,62 @@ Example:
 """
 
 from dataclasses import dataclass, field
-from typing import Literal, Optional, Union, overload
+from typing import Any, Literal, Optional, Union, overload
+import hashlib
 
 import pydicom
+
+
+def _compute_value_hash(value: Any) -> str:
+    """Computes a hash string for any DICOM value, including non-hashable types.
+
+    Handles numpy arrays (pixel data), sequences, and other complex types
+    by converting them to bytes and computing an MD5 hash.
+
+    Args:
+        value: The DICOM element value to hash.
+
+    Returns:
+        A hex string representing the hash of the value.
+    """
+    try:
+        # Try to check if it's a numpy array (pixel data)
+        if hasattr(value, 'tobytes'):
+            # numpy array - hash the raw bytes
+            return hashlib.md5(value.tobytes()).hexdigest()
+
+        # Try to check if it's a pydicom Sequence
+        if isinstance(value, pydicom.Sequence):
+            # Hash each item in the sequence recursively
+            seq_hashes: list[str] = [_compute_value_hash(item) for item in value]
+            return hashlib.md5("".join(seq_hashes).encode()).hexdigest()
+
+        # Try to check if it's a pydicom Dataset (nested)
+        if isinstance(value, pydicom.Dataset):
+            # Hash all elements in the dataset
+            elem_hashes: list[str] = []
+            for elem in value:
+                elem_hashes.append(f"{elem.tag}:{_compute_value_hash(elem.value)}")
+            return hashlib.md5("".join(elem_hashes).encode()).hexdigest()
+
+        # For bytes, hash directly
+        if isinstance(value, bytes):
+            return hashlib.md5(value).hexdigest()
+
+        # For other iterables (but not strings), try to hash contents
+        if hasattr(value, '__iter__') and not isinstance(value, (str, bytes)):
+            try:
+                items: list[str] = [_compute_value_hash(item) for item in value]
+                return hashlib.md5("".join(items).encode()).hexdigest()
+            except (TypeError, RecursionError):
+                pass
+
+        # For simple hashable types, use their string representation
+        return hashlib.md5(str(value).encode()).hexdigest()
+
+    except Exception:
+        # Fallback: hash the string representation
+        return hashlib.md5(str(value).encode()).hexdigest()
 
 
 # --- Data Structures ---
@@ -56,28 +109,37 @@ class AttributeValue:
     """Represents a DICOM attribute paired with its value.
 
     Links a FileAttribute to its actual value in a specific DICOM file,
-    enabling value-level comparisons between files.
+    enabling value-level comparisons between files. Comparison is based on
+    the actual value content hash, not just the string representation.
 
     Attributes:
         attr: The FileAttribute this value belongs to.
         repval: String representation of the value (for display).
         value: The actual value stored in the DICOM element.
+        value_hash: MD5 hash of the actual value content for comparison.
     """
 
     attr: FileAttribute
     repval: str
-    value: any  # type: ignore
+    value: Any = field(compare=False)  # Exclude from auto-generated __eq__
+    value_hash: str = field(default="")  # Hash of actual value content
 
     def __repr__(self) -> str:
         return f"AttributeValue([{self.attr._str()}]: {self.repval})"
 
     @property
     def _hash_str(self) -> str:
-        """Returns a unique string for hashing purposes."""
-        return f"val:{self.attr._hash_str}:{self.repval}"
+        """Returns a unique string for hashing purposes based on actual value content."""
+        return f"val:{self.attr._hash_str}:{self.value_hash}"
 
     def __hash__(self) -> int:
         return hash(self._hash_str)
+
+    def __eq__(self, other: object) -> bool:
+        """Compares AttributeValues based on attribute and value hash."""
+        if not isinstance(other, AttributeValue):
+            return NotImplemented
+        return self.attr == other.attr and self.value_hash == other.value_hash
 
 
 @dataclass(frozen=True, eq=True)
@@ -520,10 +582,11 @@ class Dicom:
                 name = "NAME MISSING"
 
             repval: str = str(e.repval)
-            val: any = e.value  # type: ignore
+            val: Any = e.value
+            val_hash: str = _compute_value_hash(val)
 
             attr: FileAttribute = FileAttribute(tag, name)
-            attr_val: AttributeValue = AttributeValue(attr, repval, val)
+            attr_val: AttributeValue = AttributeValue(attr, repval, val, val_hash)
 
             self.attrs.add(attr)
             self.vals.add(attr_val)
