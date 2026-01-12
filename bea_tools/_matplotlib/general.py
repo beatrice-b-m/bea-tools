@@ -65,9 +65,7 @@ class StackedBarStyle(BarPlotStyle):
         self, s_feature_counts: dict[str, list[int]], ymax: Optional[float]
     ) -> float:
         if ymax is None:
-            total_counts: list[int] = [
-                sum(z) for z in zip(*s_feature_counts.values())
-            ]
+            total_counts: list[int] = [sum(z) for z in zip(*s_feature_counts.values())]
             return round(max(total_counts) * 1.1)
         return ymax
 
@@ -122,9 +120,7 @@ class SideBarStyle(BarPlotStyle):
                 bar_label_kwargs["color"] = color
 
             if self.bar_label_percentages and self.total_n is not None:
-                bar_labels = [
-                    f"{v:d}\n({v/self.total_n:.1%})" for v in s_count
-                ]
+                bar_labels = [f"{v:d}\n({v/self.total_n:.1%})" for v in s_count]
                 bar_label_kwargs["labels"] = bar_labels
 
             ax.bar_label(p, **bar_label_kwargs)
@@ -264,12 +260,12 @@ def stratified_bar_plot(
     xlabel: Optional[str] = None,
     titles: Optional[list[str]] = None,
     suptitle: Optional[str] = None,
-    parent: Optional[plt.Figure] = None,
+    parent: Optional[plt.Figure] = None,  # type: ignore
     x_feature_levels: Optional[list[str]] = None,
     width: float = 0.6,
     color_bar_labels: bool = True,
     bar_label_percentages: bool = True,
-) -> plt.Figure:
+) -> plt.Figure:  # type: ignore
     """
     Create stratified bar plots showing overall data and data split by stratification feature.
 
@@ -315,6 +311,7 @@ def stratified_bar_plot(
     if parent is None:
         parent = plt.figure(constrained_layout=True, **fig_kwargs)
 
+    assert parent is not None
     axes = parent.subplots(n_plots, 1)
 
     # plot combined strat levels first with the original data
@@ -404,9 +401,9 @@ def stratified_stacked_bar_plot(
     xlabel: Optional[str] = None,
     titles: Optional[list[str]] = None,
     suptitle: Optional[str] = None,
-    parent: Optional[plt.Figure] = None,
+    parent: Optional[plt.Figure] = None,  # type: ignore
     x_feature_levels: Optional[list[str]] = None,
-) -> plt.Figure:
+) -> plt.Figure:  # type: ignore
     """
     Create stratified stacked bar plots. This is a convenience wrapper around stratified_bar_plot().
 
@@ -476,9 +473,9 @@ def stratified_side_bar_plot(
     xlabel: Optional[str] = None,
     titles: Optional[list[str]] = None,
     suptitle: Optional[str] = None,
-    parent: Optional[plt.Figure] = None,
+    parent: Optional[plt.Figure] = None,  # type: ignore
     x_feature_levels: Optional[list[str]] = None,
-) -> plt.Figure:
+) -> plt.Figure:  # type: ignore
     """
     Create stratified side-by-side bar plots. This is a convenience wrapper around stratified_bar_plot().
 
