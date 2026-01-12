@@ -24,6 +24,7 @@ classifiers = [
 
 dependencies = [
     "pandas >= 2.2",
+    "pydicom >= 3.0"
 ]
 
 [tool.setuptools_scm]
