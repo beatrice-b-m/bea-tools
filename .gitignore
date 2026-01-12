@@ -4,3 +4,7 @@
 __pycache__/
 */__pycache__/
 .claude/
+
+
+# folder to store private data used for testing
+.private-test-materials/*
