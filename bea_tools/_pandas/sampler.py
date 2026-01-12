@@ -65,7 +65,7 @@ class Level:
 class Feature:
     """Defines a dimension of stratification.
 
-    Orchestrates the creation of Levels and manages the distribution of 
+    Orchestrates the creation of Levels and manages the distribution of
     weights and configuration across them.
 
     Attributes:
@@ -75,6 +75,7 @@ class Feature:
         label_col: Optional output column name for the matched label.
         strict: If True, levels in this feature won't accept spillover.
         resampling_weight: Priority multiplier for spillover absorption.
+        balanced: If True, ignores weights/counts and ensures equal distribution across levels.
     """
     def __init__(
         self,
@@ -83,11 +84,12 @@ class Feature:
         levels: list[Any],
         weights: Optional[list[float]] = None,
         conditional_weights: Optional[list[dict]] = None,
-        counts: list[Optional[int]] = [None],
-        labels: list[Optional[str]] = [None],
+        counts: Optional[list[Optional[int]]] = None,
+        labels: Optional[list[Optional[str]]] = None,
         label_col: Optional[str] = None,
         strict: bool = False,
-        resampling_weight: float = 1.0
+        resampling_weight: float = 1.0,
+        balanced: bool = False
     ):
         """Initializes the Feature and generates child Level objects.
 
@@ -102,11 +104,13 @@ class Feature:
             label_col: Column to write labels to.
             strict: If True, prevents spillover re-balancing for this feature.
             resampling_weight: Multiplier for maintaining weight ratios.
+            balanced: If True, ignores weights/counts and distributes equally across levels.
         """
         self.name = name
         self.label_col = label_col
         self.strict = strict
         self.resampling_weight = resampling_weight
+        self.balanced = balanced
         
         n = len(levels)
         weights = weights or [1.0 / n] * n
@@ -448,58 +452,97 @@ class TreeSampler:
             return
 
         feature = self.features[f_idx]
-        
+
         # calculate theoretical targets for children
         parent_n = parent_node.target_n
         remaining_n = parent_n
-        
-        for i, level in enumerate(feature.levels):
-            is_last_level = (i == len(feature.levels) - 1)
-            
-            # --- Target Calculation ---
-            # determine target, then check if we need to force-fix it
-            # to ensure conservation of mass
-            
-            if level.count is not None and f_idx == 0:
-                target = level.count
-            elif level.cond_weights and parent_node.route:
-                w = 1.0
-                for req_feat, weight_map in level.cond_weights.items():
-                    prev_val = parent_node.route.get(req_feat)
-                    w *= weight_map.get(prev_val, 1.0)
-                target = int(w * parent_n)
-            else:
-                target = int(level.weight * parent_n)
 
-            # force last level to take remainder
-            if is_last_level:
-                target = remaining_n
-            
-            remaining_n -= target
-            
-            # slice data
-            level_df = data.query(level.query)
-            if feature.label_col:
-                level_df = level_df.copy()
-                level_df[feature.label_col] = level.label
+        # --- BALANCED MODE: Equal distribution across levels ---
+        if feature.balanced:
+            n_levels = len(feature.levels)
+            base_target = parent_n // n_levels
+            extra = parent_n % n_levels
 
-            # update route
-            new_route = parent_node.route.copy()
-            new_route[feature.name] = str(level.name)
+            for i, level in enumerate(feature.levels):
+                # Distribute remainder across first 'extra' levels
+                target = base_target + (1 if i < extra else 0)
 
-            # create node
-            child_node = SamplingNode(
-                name=f"{feature.name}={level.name}",
-                data=level_df,
-                target_n=target,
-                count_col=self.count_col,
-                single_per_patient=self.single_per_patient,
-                route=new_route,
-                strict=level.strict,
-                resampling_weight=level.resampling_weight
-            )
-            
-            parent_node.add_child(child_node)
-            
-            # recurse
-            self._build_tree(child_node, level_df, f_idx + 1)
+                # slice data
+                level_df = data.query(level.query)
+                if feature.label_col:
+                    level_df = level_df.copy()
+                    level_df[feature.label_col] = level.label
+
+                # update route
+                new_route = parent_node.route.copy()
+                new_route[feature.name] = str(level.name)
+
+                # create node
+                child_node = SamplingNode(
+                    name=f"{feature.name}={level.name}",
+                    data=level_df,
+                    target_n=target,
+                    count_col=self.count_col,
+                    single_per_patient=self.single_per_patient,
+                    route=new_route,
+                    strict=level.strict,
+                    resampling_weight=level.resampling_weight
+                )
+
+                parent_node.add_child(child_node)
+
+                # recurse
+                self._build_tree(child_node, level_df, f_idx + 1)
+
+        # --- STANDARD MODE: Use weights/counts ---
+        else:
+            for i, level in enumerate(feature.levels):
+                is_last_level = (i == len(feature.levels) - 1)
+
+                # --- Target Calculation ---
+                # determine target, then check if we need to force-fix it
+                # to ensure conservation of mass
+
+                if level.count is not None and f_idx == 0:
+                    target = level.count
+                elif level.cond_weights and parent_node.route:
+                    w = 1.0
+                    for req_feat, weight_map in level.cond_weights.items():
+                        prev_val = parent_node.route.get(req_feat)
+                        w *= weight_map.get(prev_val, 1.0)
+                    target = int(w * parent_n)
+                else:
+                    target = int(level.weight * parent_n)
+
+                # force last level to take remainder
+                if is_last_level:
+                    target = remaining_n
+
+                remaining_n -= target
+
+                # slice data
+                level_df = data.query(level.query)
+                if feature.label_col:
+                    level_df = level_df.copy()
+                    level_df[feature.label_col] = level.label
+
+                # update route
+                new_route = parent_node.route.copy()
+                new_route[feature.name] = str(level.name)
+
+                # create node
+                child_node = SamplingNode(
+                    name=f"{feature.name}={level.name}",
+                    data=level_df,
+                    target_n=target,
+                    count_col=self.count_col,
+                    single_per_patient=self.single_per_patient,
+                    route=new_route,
+                    strict=level.strict,
+                    resampling_weight=level.resampling_weight
+                )
+
+                parent_node.add_child(child_node)
+
+                # recurse
+                self._build_tree(child_node, level_df, f_idx + 1)
