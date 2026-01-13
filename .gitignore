@@ -8,3 +8,6 @@ __pycache__/
 
 # folder to store private data used for testing
 .private-test-materials/*
+
+# dev notebook
+_dev.ipynb
