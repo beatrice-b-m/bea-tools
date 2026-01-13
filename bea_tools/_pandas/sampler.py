@@ -198,24 +198,26 @@ class SamplingNode:
         route: dict[str, str],
         strict: bool = False,
         resampling_weight: float = 1.0,
+        sort_col: Optional[str] = "studydate_anon",
     ):
-        self.name = name
-        self.data = data
-        self.target_n = target_n
-        self.route = route
-        self.strict = strict
-        self.resampling_weight = resampling_weight
+        self.name: str = name
+        self.data: pd.DataFrame = data
+        self.target_n: int = target_n
+        self.route: dict[str, str] = route
+        self.strict: bool = strict
+        self.resampling_weight: float = resampling_weight
+        self.sort_col: Optional[str] = sort_col
 
         # tree linkage
         self.children: list["SamplingNode"] = []
 
         # capacity calculation
-        self.count_col = count_col
-        self.single_per_patient = single_per_patient
+        self.count_col: str = count_col
+        self.single_per_patient: bool = single_per_patient
 
-        self.ids = data[count_col].unique().tolist()
-        self.capacity = len(self.ids)
-        self.original_target = target_n
+        self.ids: list[int] = data[count_col].unique().tolist()
+        self.capacity: int = len(self.ids)
+        self.original_target: int = target_n
 
     @property
     def is_leaf(self) -> bool:
@@ -365,7 +367,7 @@ class SamplingNode:
             leaves.extend(c.collect_leaves())
         return leaves
 
-    def refresh_ids(self, exclude_patients: list[str]):
+    def refresh_ids(self, exclude_patients: list[int]):
         """Recalculates capacity by excluding used patients (for greedy sampler)."""
         if self.single_per_patient:
             current_ids = set(self.ids)
@@ -382,9 +384,16 @@ class SamplingNode:
 
         sampled_ids = rng.sample(self.ids, n)
 
-        # check single_per_patient constraint
-        if self.single_per_patient:
-            return self.data[self.data[self.count_col].isin(sampled_ids)].sort_values("studydate_anon").drop_duplicates("empi_anon", keep="first")  # type: ignore
+        # single-per-patient only (sorted)
+        if self.single_per_patient and (self.sort_col is not None):
+            return self.data[self.data[self.count_col].isin(sampled_ids)].sort_values(self.sort_col).drop_duplicates("empi_anon", keep="first")  # type: ignore
+
+        # single-per-patient only (arbitrary selection)
+        # TODO: default here is to select first, do we add ability to randomly choose etc.?
+        elif self.single_per_patient:
+            return self.data[self.data[self.count_col].isin(sampled_ids)].drop_duplicates("empi_anon", keep="first")  # type: ignore
+
+        # multiple-per-patient
         else:
             return self.data[self.data[self.count_col].isin(sampled_ids)]  # type: ignore
 
@@ -414,6 +423,7 @@ class TreeSampler:
         features: list[Feature],
         seed: int = 13,
         count_col: str = "empi_anon",
+        sort_col: Optional[str] = "studydate_anon",
         single_per_patient: bool = True,
     ):
         self.n = n
@@ -423,13 +433,20 @@ class TreeSampler:
         self.single_per_patient = single_per_patient
         self.rng = random.Random(seed)
         self.patients = []  # track used patients across sampling steps
+        self.sort_col: Optional[str] = sort_col
 
     def sample_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """Executes the full sampling pipeline."""
         print("1. Building Tree...")
         # create a dummy root node to hold the structure
         root = SamplingNode(
-            "ROOT", data, self.n, self.count_col, self.single_per_patient, {}
+            "ROOT",
+            data,
+            self.n,
+            self.count_col,
+            self.single_per_patient,
+            {},
+            sort_col=self.sort_col,
         )
 
         # recursively build tree (pass 1)
@@ -522,6 +539,7 @@ class TreeSampler:
                     route=new_route,
                     strict=level.strict,
                     resampling_weight=level.resampling_weight,
+                    sort_col=self.sort_col,
                 )
 
                 parent_node.add_child(child_node)
@@ -575,6 +593,7 @@ class TreeSampler:
                     route=new_route,
                     strict=level.strict,
                     resampling_weight=level.resampling_weight,
+                    sort_col=self.sort_col,
                 )
 
                 parent_node.add_child(child_node)
