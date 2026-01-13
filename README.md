@@ -12,6 +12,65 @@ pip install bea-tools
 
 ## Features
 
+### Utility Functions
+
+Helper functions for formatting and displaying output in a clean, readable way.
+
+#### divider()
+
+Creates formatted divider lines with optional text alignment.
+
+```python
+from bea_tools.utility import divider
+
+# Simple divider
+print(divider(line_width=50))  # --------------------...
+
+# Divider with centered text
+print(divider("Section Header", "=", line_width=50, align="center"))
+# ============ Section Header ============
+
+# Divider with left-aligned text
+print(divider("Results", "-", align="left"))
+# Results -------------------------
+```
+
+#### aligned()
+
+Formats items within a frame, which is then aligned within a line. Perfect for creating clean output displays.
+
+```python
+from bea_tools.utility import aligned
+
+# Center two items within a frame
+print(aligned("Label:", "Value", frame_width=30, line_width=50))
+
+# Multiple items distributed across frame
+print(aligned("A", "B", "C", frame_width=40))
+```
+
+### Pandas Extensions
+
+#### Series.bea.value_counts()
+
+Enhanced value counts with custom sorting, normalization, and formatted string output.
+
+```python
+import pandas as pd
+
+df = pd.DataFrame({'category': ['A', 'B', 'A', 'C', 'B', 'A']})
+
+# Get counts with proportions as formatted strings
+counts = df['category'].bea.value_counts(with_proportion=True, output=True)
+# Returns: {'A': '3 (50.0%)', 'B': '2 (33.3%)', 'C': '1 (16.7%)'}
+
+# Custom sort order
+counts = df['category'].bea.value_counts(sort=['A', 'B', 'C'], output=True)
+
+# Display directly (Jupyter-friendly)
+df['category'].bea.value_counts(with_proportion=True)
+```
+
 ### TreeSampler
 
 A hierarchical stratified sampling tool for pandas DataFrames. Designed for scenarios where you need to sample data while maintaining specific proportions across multiple categorical dimensions, with intelligent handling of capacity constraints.
@@ -23,7 +82,8 @@ A hierarchical stratified sampling tool for pandas DataFrames. Designed for scen
 - **Flexible matching**: Match values using `equals`, `contains`, or `between` strategies
 - **Conditional weights**: Define weights that vary based on the path through the sampling tree
 - **Strict mode**: Lock specific strata to prevent them from absorbing spillover
-- **Single-per-entity sampling**: Ensure unique entities (e.g., one exam per patient)
+- **Balanced sampling**: Equal distribution across levels regardless of population proportions
+- **Single-per-entity sampling**: Ensure unique entities (e.g., one exam per patient) with optional sorting control
 
 ### DicomComparer
 
@@ -136,6 +196,42 @@ category_feature = Feature(
             'F': [0.4, 0.6]   # When gender=F: 40% X, 60% Y
         }
     }]
+)
+```
+
+### Balanced Sampling
+
+Ensure equal representation across levels, ignoring the underlying population distribution:
+
+```python
+# This feature will have exactly equal samples from each level
+feature = Feature(
+    name='modality',
+    match_type='equals',
+    levels=['CT', 'MRI', 'Xray', 'US'],
+    balanced=True  # Distributes samples equally across all 4 levels
+)
+```
+
+### Optional Sorting for Single-Per-Patient
+
+Control whether to use a sort column when selecting one row per patient:
+
+```python
+# With sorting (e.g., earliest study date per patient)
+sampler = TreeSampler(
+    n=100,
+    features=features,
+    sort_col='studydate_anon',  # Default
+    single_per_patient=True
+)
+
+# Without sorting (arbitrary selection, faster)
+sampler = TreeSampler(
+    n=100,
+    features=features,
+    sort_col=None,  # Disables sorting
+    single_per_patient=True
 )
 ```
 
