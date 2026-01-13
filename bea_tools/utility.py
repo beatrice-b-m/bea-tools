@@ -11,7 +11,7 @@ def divider(
             Defaults to "".
         line (str, optional): The character or pattern to repeat for the line
             (e.g., "-" or "+="). Defaults to "-".
-        length (int, optional): The total character length of the resulting string.
+        line_width (int, optional): The total character length of the resulting string.
             Defaults to 80.
         align (str, optional): The alignment of the text. Options are "left",
             "center", or "right". Defaults to "left".
