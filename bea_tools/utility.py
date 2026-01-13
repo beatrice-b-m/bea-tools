@@ -2,7 +2,7 @@ from typing import Optional, Literal
 
 
 def divider(
-    text: str = "", line: str = "-", length: int = 80, align: str = "left"
+    text: str = "", line: str = "-", line_width: int = 80, align: str = "left"
 ) -> str:
     """Creates a formatted divider line with optional text alignment.
 
@@ -25,7 +25,7 @@ def divider(
     if text:
         text = f" {text} "
 
-    remaining = max(0, length - len(text))
+    remaining = max(0, line_width - len(text))
 
     # define filler logic
     def get_filler(size):
