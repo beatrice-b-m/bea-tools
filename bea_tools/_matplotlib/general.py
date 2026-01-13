@@ -11,7 +11,7 @@ class BarPlotStyle(ABC):
     @abstractmethod
     def plot(
         self,
-        ax: plt.Axes,
+        ax: plt.Axes,  # type: ignore
         x_feature_levels: list[str],
         s_feature_levels: list[str],
         s_feature_counts: dict[str, list[int]],
@@ -35,7 +35,7 @@ class StackedBarStyle(BarPlotStyle):
 
     def plot(
         self,
-        ax: plt.Axes,
+        ax: plt.Axes,  # type: ignore
         x_feature_levels: list[str],
         s_feature_levels: list[str],
         s_feature_counts: dict[str, list[int]],
@@ -85,7 +85,7 @@ class SideBarStyle(BarPlotStyle):
 
     def plot(
         self,
-        ax: plt.Axes,
+        ax: plt.Axes,  # type: ignore
         x_feature_levels: list[str],
         s_feature_levels: list[str],
         s_feature_counts: dict[str, list[int]],
@@ -147,7 +147,7 @@ def bar_plot(
     x_feature_levels: Optional[list[str]] = None,
     title: Optional[str] = None,
     xlabel: Optional[str] = None,
-    ax: Optional[plt.Axes] = None,
+    ax: Optional[plt.Axes] = None,  # type: ignore
     ymax: Optional[float] = None,
     fig_kwargs: Optional[dict] = None,
     width: float = 0.6,
