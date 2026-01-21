@@ -1,602 +1,678 @@
+from __future__ import annotations
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Optional, Any
 import pandas as pd
-import random
-import math
-from typing import Literal, Optional, Any, Union
+import pulp
+import warnings
+import uuid
+import itertools
 
-# --- Data Structures ---
+
+# core structures
 
 
-class Level:
-    """Represents a single category/value within a Feature.
-
-    Holds the configuration for a specific level, including how to match it
-    in the dataframe, its target weight, and any conditional logic.
+@dataclass(frozen=True)
+class PathStep:
+    """represents a single decision node in the feature hierarchy.
 
     Attributes:
-        feature: Name of the parent feature.
-        match_type: Strategy to match values ('contains', 'equals', 'between').
-        name: The value(s) defining this level.
-        weight: Target proportion for this level.
-        count: Explicit target count (overrides weight).
-        cond_weights: Conditional weights dependent on parent path choices.
-        label: Output label for this level.
-        strict: If True, this level cannot accept spillover samples.
-        resampling_weight: Multiplier for prioritizing spillover absorption.
-        query: Compiled pandas query string.
+        feature_name: name of the feature this step represents.
+        level_name: the specific level/value within the feature.
+        label_val: the label to use in output for this step.
+        output_col: column name for output labeling, none if not requested.
     """
+
+    feature_name: str
+    level_name: str
+    label_val: str
+    output_col: Optional[str]  # none if no label column was requested for this feature
+
+
+# unique sequence of decisions that assigns a row to a specific leaf
+PathSignature = tuple[PathStep, ...]
+
+
+class BaseConstraint(ABC):
+    """protocol that all constraints must implement."""
+
+    @abstractmethod
+    def apply(
+        self,
+        prob: pulp.LpProblem,
+        data: pd.DataFrame,
+        lp_vars: dict[int, dict[PathSignature, pulp.LpVariable]],
+        penalty_terms: list[Any],
+    ) -> None:
+        """injects specific linear equations into the problem.
+
+        Args:
+            prob: the active PuLP problem.
+            data: the source dataframe (read-only).
+            lp_vars: registry of variables {row_idx: {PathSignature: LpVariable}}.
+            penalty_terms: list to accumulate penalty expressions.
+        """
+        pass
+
+
+# constraint classes
+
+
+class UniquenessConstraint(BaseConstraint):
+    """enforces cardinality constraints (e.g., 'max n rows per patient').
+
+    always treated as a hard constraint.
+
+    Attributes:
+        id_col: column name to group rows by.
+        n: maximum number of rows allowed per unique id.
+    """
+
+    id_col: str
+    n: int
+
+    def __init__(self, id_col: str, n: int = 1) -> None:
+        """initializes uniqueness constraint.
+
+        Args:
+            id_col: column name to group rows by.
+            n: maximum number of rows allowed per unique id. defaults to 1.
+        """
+        self.id_col = id_col
+        self.n = n
+
+    def apply(
+        self,
+        prob: pulp.LpProblem,
+        data: pd.DataFrame,
+        lp_vars: dict[int, dict[PathSignature, pulp.LpVariable]],
+        penalty_terms: list[Any],
+    ) -> None:
+        # group active variables by id (build dict once to avoid n^2 lookups)
+        vars_by_id: dict[Any, list[pulp.LpVariable]] = {}
+
+        for row_idx, paths in lp_vars.items():
+            uid: Any = data.at[row_idx, self.id_col]
+            if uid not in vars_by_id:
+                vars_by_id[uid] = []
+            vars_by_id[uid].extend(paths.values())
+
+        # apply constraints
+        for uid, variables in vars_by_id.items():
+            # only add constraint if group size could violate it
+            if len(variables) > self.n:
+                prob += pulp.lpSum(variables) <= self.n, f"Unique_{self.id_col}_{uid}"
+
+
+class FeatureConstraint(BaseConstraint):
+    """hierarchical distribution constraint.
+
+    supports linking children, fuzzy matching ('contains'), and output labeling.
+
+    Attributes:
+        name: feature column name in the dataframe.
+        levels: list of possible values/levels for this feature.
+        weights: target distribution weights for each level (must sum to 1.0).
+        how: matching strategy, either 'equals' or 'contains'.
+        strictness: constraint strictness (1.0 = hard, <1.0 = soft).
+        label_col: optional output column name for labeling selected rows.
+        labels: custom labels for each level (defaults to level names).
+        children: nested child constraints mapped by level.
+    """
+
+    name: str
+    levels: list[str]
+    weights: list[float]
+    how: str
+    strictness: float
+    label_col: Optional[str]
+    labels: list[str]
+    children: dict[str, list[FeatureConstraint]]
+
+    def __init__(
+        self,
+        name: str,
+        levels: list[str],
+        weights: Optional[list[float]] = None,
+        how: str = "equals",
+        strictness: float = 1.0,
+        label_col: Optional[str] = None,
+        labels: Optional[list[str]] = None,
+    ) -> None:
+        """initializes feature constraint.
+
+        Args:
+            name: feature column name in the dataframe.
+            levels: list of possible values/levels for this feature.
+            weights: target distribution weights for each level. defaults to uniform.
+            how: matching strategy, either 'equals' or 'contains'. defaults to 'equals'.
+            strictness: constraint strictness (1.0 = hard, <1.0 = soft). defaults to 1.0.
+            label_col: optional output column name for labeling selected rows.
+            labels: custom labels for each level. defaults to level names.
+
+        Raises:
+            ValueError: if levels and weights have different lengths.
+            ValueError: if levels and labels have different lengths.
+        """
+        self.name = name
+        self.levels = levels
+        self.weights = weights or [1.0 / len(levels)] * len(levels)
+        self.how = how  # 'equals' or 'contains'
+        self.strictness = strictness
+        self.label_col = label_col
+        self.labels = labels if labels else levels
+
+        # hierarchy: map level_name -> list[child_constraints]
+        self.children: dict[str, list[FeatureConstraint]] = {
+            lvl: [] for lvl in self.levels
+        }
+
+        # validation
+        if len(self.levels) != len(self.weights):
+            raise ValueError(f"Feature '{name}': Mismatch between levels and weights.")
+        if labels and len(labels) != len(levels):
+            raise ValueError(f"Feature '{name}': Mismatch between levels and labels.")
+
+    def link(self, child: "FeatureConstraint", levels: Optional[list[str]] = None) -> None:
+        """attaches a child constraint to specific levels of this feature.
+
+        Args:
+            child: the child feature_constraint to attach.
+            levels: specific levels to attach child to. defaults to all levels.
+
+        Raises:
+            ValueError: if specified level is not found in this feature.
+        """
+        target_levels: list[str] = levels if levels else self.levels
+        for lvl in target_levels:
+            if lvl in self.children:
+                self.children[lvl].append(child)
+            else:
+                raise ValueError(f"Level '{lvl}' not found in feature '{self.name}'")
+
+    def _match_row(self, val: Any, level: str) -> bool:
+        """helper for equality vs contains logic.
+
+        Args:
+            val: the value from the dataframe to match.
+            level: the level string to match against.
+
+        Returns:
+            true if the value matches the level according to self.how.
+        """
+        val_str: str = str(val)
+        if self.how == "equals":
+            return val_str == level
+        elif self.how == "contains":
+            return level in val_str
+        return False
+
+    def get_valid_paths(self, row_idx: int, data: pd.DataFrame) -> list[list[PathStep]]:
+        """recursively finds all valid assignment paths for a single row.
+
+        Args:
+            row_idx: index of the row in the dataframe.
+            data: the source dataframe.
+
+        Returns:
+            list of paths, where each path is a list of path_steps.
+        """
+        row_val: Any = data.at[row_idx, self.name]
+        valid_paths: list[list[PathStep]] = []
+
+        for i, lvl in enumerate(self.levels):
+            if self._match_row(row_val, lvl):
+                # create the step for this node
+                current_step: PathStep = PathStep(
+                    feature_name=self.name,
+                    level_name=lvl,
+                    label_val=self.labels[i],
+                    output_col=self.label_col,
+                )
+
+                children: list[FeatureConstraint] = self.children[lvl]
+
+                if not children:
+                    # leaf node
+                    valid_paths.append([current_step])
+                else:
+                    # branch node: recursively collect child paths
+                    # assumes AND logic: row must satisfy at least one path in every child chain
+                    # for a single chain, just concatenate
+                    # if multiple independent children exist, need cartesian product
+
+                    # collect all valid paths for each child
+                    child_path_groups: Optional[list[list[list[PathStep]]]] = []
+                    for child in children:
+                        c_paths: list[list[PathStep]] = child.get_valid_paths(row_idx, data)
+                        if not c_paths:
+                            child_path_groups = None  # failed a required child constraint
+                            break
+                        child_path_groups.append(c_paths)
+
+                    if child_path_groups is None:
+                        continue  # skip this level, row doesn't satisfy children
+
+                    # cartesian product to combine paths from multiple children
+                    # e.g., child_a has 2 valid paths, child_b has 1 -> 2 total combinations
+                    for combination in itertools.product(*child_path_groups):
+                        # combination is a tuple of lists (paths), flatten it
+                        combined_suffix: list[PathStep] = []
+                        for p in combination:
+                            combined_suffix.extend(p)
+                        valid_paths.append([current_step] + combined_suffix)
+
+        return valid_paths
+
+    def apply(
+        self,
+        prob: pulp.LpProblem,
+        data: pd.DataFrame,
+        lp_vars: dict[int, dict[PathSignature, pulp.LpVariable]],
+        penalty_terms: list[Any],
+    ) -> None:
+        """entry point for applying distribution constraints.
+
+        Args:
+            prob: the active PuLP problem.
+            data: the source dataframe (read-only).
+            lp_vars: registry of variables {row_idx: {PathSignature: LpVariable}}.
+            penalty_terms: list to accumulate penalty expressions.
+        """
+        self._apply_recursive(prob, lp_vars, penalty_terms, parent_vars=None)
+
+    def _apply_recursive(
+        self,
+        prob: pulp.LpProblem,
+        lp_vars: dict[int, dict[PathSignature, pulp.LpVariable]],
+        penalty_terms: list[Any],
+        parent_vars: Optional[list[pulp.LpVariable]],
+    ) -> None:
+        """recursively applies distribution constraints to this feature and children.
+
+        Args:
+            prob: the active PuLP problem.
+            lp_vars: registry of variables {row_idx: {PathSignature: LpVariable}}.
+            penalty_terms: list to accumulate penalty expressions.
+            parent_vars: variables from parent scope, none for root level.
+        """
+        # filter variables: get all vars that passed through the parent node (if any)
+        # and group them by the levels of this feature
+        vars_by_level: dict[str, list[pulp.LpVariable]] = {lvl: [] for lvl in self.levels}
+        all_vars_in_scope: list[pulp.LpVariable] = []
+
+        for row_idx, paths in lp_vars.items():
+            for path, var in paths.items():
+                # optimization: in large-scale systems, would index this better
+                # here we scan the path signature
+
+                # check if this var belongs to the parent scope
+                if parent_vars is not None and var not in parent_vars:
+                    continue
+
+                # find the step corresponding to this feature
+                step: Optional[PathStep] = next((s for s in path if s.feature_name == self.name), None)
+                if step:
+                    vars_by_level[step.level_name].append(var)
+                    all_vars_in_scope.append(var)
+
+        if not all_vars_in_scope:
+            return
+
+        # apply distribution constraints
+        total_scope_sum: pulp.LpAffineExpression = pulp.lpSum(all_vars_in_scope)
+
+        for i, lvl in enumerate(self.levels):
+            vars_in_level: list[pulp.LpVariable] = vars_by_level[lvl]
+            target_weight: float = self.weights[i]
+
+            # equation: sum(level) == target * sum(total)
+            lhs: pulp.LpAffineExpression = pulp.lpSum(vars_in_level)
+            rhs: pulp.LpAffineExpression = target_weight * total_scope_sum
+
+            uid: str = str(uuid.uuid4())
+            self._add_soft_equality(
+                prob,
+                lhs,
+                rhs,
+                self.strictness,
+                penalty_terms,
+                f"{self.name}_{lvl}_{uid}",
+            )
+
+            # recurse to children
+            for child in self.children[lvl]:
+                child._apply_recursive(prob, lp_vars, penalty_terms, vars_in_level)
+
+    def _add_soft_equality(
+        self,
+        prob: pulp.LpProblem,
+        lhs: pulp.LpAffineExpression,
+        rhs: pulp.LpAffineExpression,
+        strictness: float,
+        penalty_terms: list[Any],
+        name: str,
+    ) -> None:
+        """adds a soft or hard equality constraint based on strictness.
+
+        Args:
+            prob: the active PuLP problem.
+            lhs: left-hand side expression.
+            rhs: right-hand side expression.
+            strictness: constraint strictness (>=1.0 = hard, <1.0 = soft).
+            penalty_terms: list to accumulate penalty expressions.
+            name: unique name for the constraint.
+        """
+        if strictness >= 1.0:
+            prob += lhs == rhs, f"HardDist_{name}"
+        elif strictness > 0.0:
+            pos: pulp.LpVariable = pulp.LpVariable(f"slack_pos_{name}", lowBound=0)
+            neg: pulp.LpVariable = pulp.LpVariable(f"slack_neg_{name}", lowBound=0)
+
+            prob += lhs - rhs + pos - neg == 0, f"SoftDist_{name}"
+
+            # append to list instead of +=
+            penalty_weight: float = 100.0 * (1 + strictness * 10)
+            penalty_terms.append(penalty_weight * (pos + neg))
+
+
+class HomogeneityConstraint(BaseConstraint):
+    """encourages a specific feature to have the same distribution across groups.
+
+    uses symmetric global comparison (group vs global average) for stability.
+    respects strictness >= 1.0 as a hard constraint (==).
+
+    Attributes:
+        feature: the feature column that should be homogeneous across groups.
+        group_by: the feature column that defines groups.
+        weights: target size weights for each group.
+        strictness: constraint strictness (>=1.0 = hard, <1.0 = soft).
+    """
+
+    feature: str
+    group_by: str
+    weights: dict[str, float]
+    strictness: float
 
     def __init__(
         self,
         feature: str,
-        match_type: Literal["contains", "equals", "between"],
-        name: Any,
-        weight: float,
-        count: Optional[int],
-        cond_weights: Optional[dict[str, dict[str, float]]],
-        label: Optional[str],
-        strict: bool = False,
-        resampling_weight: float = 1.0,
-    ):
-        self.feature = feature
-        self.match_type = match_type
-        self.name = name
-        self.weight = weight
-        self.count = count
-        self.cond_weights = cond_weights
-        self.label = label
-        self.strict = strict
-        self.resampling_weight = resampling_weight
-        self.query = self._build_query()
-
-    def _build_query(self) -> str:
-        """Constructs the pandas query string based on match type."""
-        val = f"'{self.name}'" if isinstance(self.name, str) else self.name
-
-        if self.match_type == "equals":
-            return f"{self.feature} == {val}"
-        elif self.match_type == "contains":
-            return f"{self.feature}.str.contains({val})"
-        elif self.match_type == "between":
-            if not isinstance(val, tuple):
-                raise ValueError("Between match_type requires tuple values.")
-            return f"({self.feature} > {val[0]}) & ({self.feature} <= {val[1]})"
-        else:
-            raise ValueError(f"Unknown match_type: {self.match_type}")
-
-
-class Feature:
-    """Defines a dimension of stratification.
-
-    Orchestrates the creation of Levels and manages the distribution of
-    weights and configuration across them.
-
-    Attributes:
-        name: Name of the column in the dataframe.
-        match_type: Strategy to match values.
-        levels: list of Level objects generated from configuration.
-        label_col: Optional output column name for the matched label.
-        strict: If True, levels in this feature won't accept spillover.
-        resampling_weight: Priority multiplier for spillover absorption.
-        balanced: If True, ignores weights/counts and ensures equal distribution across levels.
-    """
-
-    def __init__(
-        self,
-        name: str,
-        match_type: Literal["contains", "equals", "between"],
-        levels: list[Any],
-        weights: Optional[list[float]] = None,
-        conditional_weights: Optional[list[dict]] = None,
-        counts: Optional[list[Optional[int]]] = None,
-        labels: Optional[list[Optional[str]]] = None,
-        label_col: Optional[str] = None,
-        strict: bool = False,
-        resampling_weight: float = 1.0,
-        balanced: bool = False,
-    ):
-        """Initializes the Feature and generates child Level objects.
+        group_by: str,
+        group_weights: dict[str, float],
+        strictness: float = 0.5,
+    ) -> None:
+        """initializes homogeneity constraint.
 
         Args:
-            name: DataFrame column name.
-            match_type: 'contains', 'equals', or 'between'.
-            levels: list of values defining the levels.
-            weights: list of float proportions (must align with levels).
-            conditional_weights: Complex dictionary for path-dependent weights.
-            counts: Explicit integer counts (overrides weights).
-            labels: Output labels for the levels.
-            label_col: Column to write labels to.
-            strict: If True, prevents spillover re-balancing for this feature.
-            resampling_weight: Multiplier for maintaining weight ratios.
-            balanced: If True, ignores weights/counts and distributes equally across levels.
+            feature: the feature column that should be homogeneous across groups.
+            group_by: the feature column that defines groups.
+            group_weights: target size weights for each group.
+            strictness: constraint strictness (>=1.0 = hard, <1.0 = soft). defaults to 0.5.
         """
-        self.name = name
-        self.label_col = label_col
-        self.strict = strict
-        self.resampling_weight = resampling_weight
-        self.balanced = balanced
+        self.feature = feature
+        self.group_by = group_by
+        self.weights = group_weights
+        self.strictness = strictness
 
-        n = len(levels)
+    def apply(
+        self,
+        prob: pulp.LpProblem,
+        data: pd.DataFrame,
+        lp_vars: dict[int, dict[PathSignature, pulp.LpVariable]],
+        penalty_terms: list[Any],
+    ) -> None:
+        """applies homogeneity constraints to the problem.
 
-        if weights is not None:
-            _weights: list[float] = weights
-        else:
-            _weights: list[float] = [1.0 / n] * n
+        Args:
+            prob: the active PuLP problem.
+            data: the source dataframe (read-only).
+            lp_vars: registry of variables {row_idx: {PathSignature: LpVariable}}.
+            penalty_terms: list to accumulate penalty expressions.
+        """
+        if self.strictness <= 0.0:
+            return
 
-        if counts is not None:
-            _counts: list[Optional[int]] = counts
-        else:
-            _counts: list[Optional[int]] = [None] * n
+        # bucket variables by {feature_value -> {group -> [vars]}}
+        target_levels: list[str] = sorted(data[self.feature].astype(str).unique())
+        groups: list[str] = list(self.weights.keys())
+        buckets: dict[str, dict[str, list[pulp.LpVariable]]] = {lvl: {g: [] for g in groups} for lvl in target_levels}
 
-        if labels is not None:
-            _labels: list[Optional[str]] = labels
-        else:
-            _labels: list[Optional[str]] = (
-                [str(l) for l in levels] if label_col else [None] * n
-            )
+        # track all variables relevant to this constraint for global sums
+        all_relevant_vars: dict[str, list[pulp.LpVariable]] = {lvl: [] for lvl in target_levels}
 
-        # process conditional weights into lookup: {level_val: {target_feat: {target_level: weight}}}
-        cond_lookup = {}
-        if conditional_weights:
-            for cw in conditional_weights:
-                feat = cw["feature"]
-                for lvl_name, weight_list in cw["weights"].items():
-                    # mapping level index to weight index
-                    for i, l_val in enumerate(levels):
-                        if l_val not in cond_lookup:
-                            cond_lookup[l_val] = {}
-                        if feat not in cond_lookup[l_val]:
-                            cond_lookup[l_val][feat] = {}
-                        try:
-                            cond_lookup[l_val][feat][lvl_name] = weight_list[i]
-                        except IndexError:
-                            pass
+        for row_idx, paths in lp_vars.items():
+            row_feat_val: str = str(data.at[row_idx, self.feature])
 
-        self.levels = []
-        for i in range(n):
-            self.levels.append(
-                Level(
-                    feature=name,
-                    match_type=match_type,
-                    name=levels[i],
-                    weight=_weights[i],
-                    count=_counts[i],
-                    cond_weights=cond_lookup.get(levels[i]),
-                    label=_labels[i],
-                    strict=strict,
-                    resampling_weight=resampling_weight,
+            # skip rows that don't have the target feature value
+            if row_feat_val not in buckets:
+                continue
+
+            for path, var in paths.items():
+                # find which group this variable is assigned to
+                group_step: Optional[PathStep] = next(
+                    (s for s in path if s.feature_name == self.group_by), None
                 )
-            )
+
+                if group_step and group_step.level_name in groups:
+                    buckets[row_feat_val][group_step.level_name].append(var)
+                    all_relevant_vars[row_feat_val].append(var)
+
+        # build symmetric balance equations
+        # target: count(group, val) should equal weight(group) * total_count(val)
+        # linear form: count(group) - weight(group) * sum(all_relevant_vars) == 0
+
+        for lvl in target_levels:
+            # sum of all groups for this feature level to act as the "global total"
+            # note: must use pulp.lpSum to delay evaluation until solve time
+            total_count_expr: pulp.LpAffineExpression = pulp.lpSum(all_relevant_vars[lvl])
+
+            # if no vars exist for this level at all, skip
+            if len(all_relevant_vars[lvl]) == 0:
+                continue
+
+            for group in groups:
+                group_vars: list[pulp.LpVariable] = buckets[lvl][group]
+                group_weight: float = self.weights[group]
+
+                # lhs: the actual count in this group
+                lhs: pulp.LpAffineExpression = pulp.lpSum(group_vars)
+
+                # rhs: the 'ideal' count based on the group's size weight
+                rhs: pulp.LpAffineExpression = group_weight * total_count_expr
+
+                # create constraint
+                if self.strictness >= 1.0:
+                    prob += lhs - rhs == 0, f"HardHomo_{self.feature}_{lvl}_{group}"
+                else:
+                    pos: pulp.LpVariable = pulp.LpVariable(f"h_pos_{lvl}_{group}", lowBound=0)
+                    neg: pulp.LpVariable = pulp.LpVariable(f"h_neg_{lvl}_{group}", lowBound=0)
+
+                    prob += (
+                        lhs - rhs + pos - neg == 0,
+                        f"SoftHomo_{self.feature}_{lvl}_{group}",
+                    )
+
+                    # exponential penalty (strictness 0.99 -> massive weight)
+                    weight: float = 10.0 * (10.0 ** (self.strictness * 5.0))
+                    penalty_terms.append(weight * (pos + neg))
 
 
-# --- Tree Logic ---
+# orchestrator
 
 
-class SamplingNode:
-    """A node in the hierarchical sampling tree.
+class LPSampler:
+    """linear programming based sampler for constrained dataset sampling.
 
-    Manages a subset of data defined by the path from the root. Responsible for
-    balancing sample targets with available capacity via hierarchical spillover.
+    uses integer linear programming to sample rows from a dataframe while
+    satisfying distribution, uniqueness, and homogeneity constraints.
 
     Attributes:
-        name: Debug name (e.g., "Gender=Male").
-        data: DataFrame subset at this node.
-        target_n: The goal sample size for this node.
-        capacity: The max available samples (unique patients/exams).
-        route: The dictionary path of features taken to reach this node.
-        children: list of child SamplingNodes.
-        strict: If True, this node cannot accept extra samples (spillover).
-        resampling_weight: Multiplier for spillover priority.
+        solver: the PuLP solver instance (highs or cbc).
     """
+
+    solver: pulp.LpSolver
 
     def __init__(
         self,
-        name: str,
+        solver_timeout: int = 300,
+        solver_path: str = "highs",
+        verbose_solver: bool = False,
+    ) -> None:
+        """initializes the lp sampler with solver configuration.
+
+        Args:
+            solver_timeout: maximum solver time in seconds. defaults to 300.
+            solver_path: path to solver executable. defaults to "highs".
+            verbose_solver: whether to show solver output. defaults to false.
+        """
+        # highs is essential for performance on large datasets
+        try:
+            print("Trying to get the HiGHS_CMD solver...")
+            self.solver = pulp.getSolver(
+                "HiGHS_CMD",
+                path=solver_path,
+                timeLimit=solver_timeout,
+                msg=verbose_solver,
+            )
+            print("HiGHS_CMD solver retrieved.")
+
+        except AttributeError:
+            warnings.warn(
+                "highs solver unavailable. falling back to default cbc. performance may degrade."
+            )
+            print("Trying to get the PULP_CBC_CMD solver...")
+            self.solver = pulp.getSolver(
+                "PULP_CBC_CMD", timeLimit=solver_timeout, msg=verbose_solver
+            )
+            print("PULP_CBC_CMD solver retrieved.")
+
+    def sample_data(
+        self,
         data: pd.DataFrame,
-        target_n: int,
-        count_col: str,
-        single_per_patient: bool,
-        route: dict[str, str],
-        strict: bool = False,
-        resampling_weight: float = 1.0,
-        sort_col: Optional[str] = "studydate_anon",
-    ):
-        self.name: str = name
-        self.data: pd.DataFrame = data
-        self.target_n: int = target_n
-        self.route: dict[str, str] = route
-        self.strict: bool = strict
-        self.resampling_weight: float = resampling_weight
-        self.sort_col: Optional[str] = sort_col
+        features: FeatureConstraint,
+        constraints: list[BaseConstraint],
+        n: int,
+        strict: bool = True,
+    ) -> pd.DataFrame:
+        """main execution pipeline for sampling data.
 
-        # tree linkage
-        self.children: list["SamplingNode"] = []
-
-        # capacity calculation
-        self.count_col: str = count_col
-        self.single_per_patient: bool = single_per_patient
-
-        self.ids: list[int] = data[count_col].unique().tolist()
-        self.capacity: int = len(self.ids)
-        self.original_target: int = target_n
-
-    @property
-    def is_leaf(self) -> bool:
-        """Returns True if the node has no children."""
-        return len(self.children) == 0
-
-    @property
-    def excess_n(self) -> int:
-        """Returns the number of spare samples available (Capacity - Target)."""
-        return self.capacity - self.target_n
-
-    def add_child(self, node: "SamplingNode"):
-        """Appends a child node."""
-        self.children.append(node)
-
-    def balance(self) -> int:
-        """Performs Hierarchical Spillover to resolve deficits.
-
-        Propagates deficits up from children and attempts to resolve them by
-        distributing the load to 'wealthy' (surplus) siblings.
+        Args:
+            data: source dataframe to sample from.
+            features: the root feature_constraint object defining hierarchy.
+            constraints: list of global constraints (uniqueness, homogeneity).
+            n: desired sample size.
+            strict: if true, fails if exact n cannot be met. if false, maximizes size up to n.
 
         Returns:
-            int: The remaining unresolvable deficit for this subtree.
+            sampled dataframe with n rows (or fewer if strict=false and infeasible).
+
+        Raises:
+            ValueError: if no rows match the root feature constraints.
         """
-        # 1. ask all children to balance themselves first (bottom-up)
-        total_child_deficit = 0
-        for child in self.children:
-            total_child_deficit += child.balance()
 
-        # 2. if i am a leaf, calculate my own simple deficit
-        if self.is_leaf:
-            if self.target_n > self.capacity:
-                deficit = self.target_n - self.capacity
-                self.target_n = self.capacity  # clip target to reality
-                return deficit
-            return 0
+        # initialize problem
+        prob: pulp.LpProblem = pulp.LpProblem("GranularSampler", pulp.LpMaximize)
 
-        # 3. if i am a parent node and my children have deficits
-        if total_child_deficit > 0:
-            # find wealthy siblings (children with surplus)
-            # STRICT LOGIC: strict nodes cannot accept work, so they are not 'wealthy'
-            wealthy_children = [
-                c for c in self.children if c.excess_n > 0 and not c.strict
-            ]
-            total_surplus = sum(c.excess_n for c in wealthy_children)
+        # generate candidate variables
+        # structure: lp_vars[row_index][path_signature] = lpvariable
+        lp_vars: dict[int, dict[PathSignature, pulp.LpVariable]] = {}
+        all_vars_flat: list[pulp.LpVariable] = []
 
-            if total_surplus > 0:
-                # distribute deficit to wealthy siblings
-                remaining_deficit = total_child_deficit
+        # optimization: only iterate rows once
+        for idx in data.index:
+            valid_paths: list[list[PathStep]] = features.get_valid_paths(idx, data)
 
-                for child in wealthy_children:
-                    available = child.excess_n
-                    take_amount = min(remaining_deficit, available)
+            if valid_paths:
+                row_vars: dict[PathSignature, pulp.LpVariable] = {}
+                for path in valid_paths:
+                    path_tuple: PathSignature = tuple(path)
+                    # unique name for the variable
+                    var_name: str = f"x_{idx}_{abs(hash(path_tuple))}"
+                    var: pulp.LpVariable = pulp.LpVariable(var_name, cat=pulp.LpBinary)
 
-                    # push the extra work down to the wealthy child
-                    child.absorb_surplus(take_amount)
+                    row_vars[path_tuple] = var
+                    all_vars_flat.append(var)
 
-                    remaining_deficit -= take_amount
-                    if remaining_deficit == 0:
-                        break
+                lp_vars[idx] = row_vars
 
-                return remaining_deficit  # pass remaining up to grandparent
+        if not all_vars_flat:
+            raise ValueError("no rows in data matched the root feature constraints.")
 
+        # apply constraints
+        penalty_terms: list[Any] = []
+
+        # root feature (recursive)
+        features.apply(prob, data, lp_vars, penalty_terms)
+
+        # global constraints
+        for constr in constraints:
+            constr.apply(prob, data, lp_vars, penalty_terms)
+
+        # define objective function
+        total_selected: pulp.LpAffineExpression = pulp.lpSum(all_vars_flat)
+        total_penalty: pulp.LpAffineExpression = pulp.lpSum(penalty_terms)  # sum the list into one expression
+
+        if strict:
+            prob += total_selected == n, "StrictSize"
+            prob += -1 * total_penalty
+        else:
+            prob += total_selected <= n, "MaxSize"
+            prob += (1000 * total_selected) - total_penalty
+
+        # solve
+        print("\nStarting solver...")
+        prob.solve(self.solver)
+        print("Solver finished.\n")
+
+        if prob.status != pulp.LpStatusOptimal:
+            msg: str = f"solver status: {pulp.LpStatus[prob.status]}"
+            if strict:
+                warnings.warn(
+                    f"{msg}. strict requirements could not be met. returning empty dataframe."
+                )
+                return pd.DataFrame()
             else:
-                # no siblings have money, pass full bill to grandparent
-                return total_child_deficit
+                warnings.warn(f"{msg}. returning best partial result.")
 
-        return 0
+        # reconstruct and label
+        selected_rows: list[int] = []
+        labels_to_inject: dict[int, dict[str, str]] = {}
 
-    def absorb_surplus(self, amount: int):
-        """Recursively distributes extra work (samples) to children.
+        for idx, paths in lp_vars.items():
+            for path_tuple, var in paths.items():
+                if var.varValue and var.varValue > 0.5:
+                    selected_rows.append(idx)
 
-        Uses 'resampling_weight' to prioritize which children receive the
-        extra load.
+                    # extract labels from the selected path
+                    row_labels: dict[str, str] = {}
+                    for step in path_tuple:
+                        if step.output_col:
+                            row_labels[step.output_col] = step.label_val
 
-        Args:
-            amount: The number of extra samples this node must take.
-        """
-        # strict check safety (should be handled by caller, but good for robustness)
-        if self.strict:
-            return
+                    if row_labels:
+                        labels_to_inject[idx] = row_labels
 
-        self.target_n += amount
-        if self.is_leaf:
-            return
-
-        remaining = amount
-
-        # filter children eligible for spillover
-        candidates = [c for c in self.children if not c.strict]
-        if not candidates:
-            return
-
-        # --- PASS 1: Weighted Proportional Distribution ---
-        # try to maintain the relative ratios, adjusted by resampling_weight
-        # weighted target = target * resampling_weight
-        total_weighted_target = sum(
-            c.target_n * c.resampling_weight for c in candidates
-        )
-
-        if total_weighted_target > 0:
-            for child in candidates:
-                if remaining == 0:
+                    # break loop: a row can only be selected once
+                    # (uniqueness_constraint ensures this, but we break to be safe)
                     break
 
-                # calculate share based on weighted ratio
-                weight_factor = child.target_n * child.resampling_weight
-                ratio = weight_factor / total_weighted_target
-                share = math.ceil(amount * ratio)
+        # build result dataframe
+        result: pd.DataFrame = data.loc[selected_rows].copy()
 
-                # 1. don't take more than we have left to give
-                share = min(share, remaining)
+        # inject labels
+        # identify all label columns that were used
+        all_label_cols: set[str] = set()
+        for labs in labels_to_inject.values():
+            all_label_cols.update(labs.keys())
 
-                # 2. don't overflow the child's physical capacity
-                max_absorbable = child.capacity - child.target_n
-                share = min(share, max_absorbable)
+        # initialize cols with none if they don't exist
+        for col in all_label_cols:
+            if col not in result.columns:
+                result[col] = None
 
-                if share > 0:
-                    child.absorb_surplus(share)
-                    remaining -= share
+        # fill values
+        for idx, labs in labels_to_inject.items():
+            for col, val in labs.items():
+                result.at[idx, col] = val
 
-        # --- PASS 2: Greedy Cleanup ---
-        # if 'remaining' is still > 0, dump into ANY eligible node with space
-        if remaining > 0:
-            # sort children by who has the most space left
-            sorted_children = sorted(
-                candidates, key=lambda c: (c.capacity - c.target_n), reverse=True
-            )
-
-            for child in sorted_children:
-                if remaining == 0:
-                    break
-
-                max_absorbable = child.capacity - child.target_n
-                take = min(remaining, max_absorbable)
-
-                if take > 0:
-                    child.absorb_surplus(take)
-                    remaining -= take
-
-    def collect_leaves(self) -> list["SamplingNode"]:
-        """Recursively collects all leaf nodes."""
-        if self.is_leaf:
-            return [self]
-        leaves = []
-        for c in self.children:
-            leaves.extend(c.collect_leaves())
-        return leaves
-
-    def refresh_ids(self, exclude_patients: list[int]):
-        """Recalculates capacity by excluding used patients (for greedy sampler)."""
-        if self.single_per_patient:
-            current_ids = set(self.ids)
-            used = set(exclude_patients)
-            # update available ids and capacity
-            self.ids = list(current_ids - used)
-            self.capacity = len(self.ids)
-
-    def sample(self, rng: random.Random) -> pd.DataFrame:
-        """Extracts the final random sample from this node's data."""
-        n = min(self.capacity, self.target_n)
-        if n <= 0:
-            return pd.DataFrame()
-
-        sampled_ids = rng.sample(self.ids, n)
-
-        # single-per-patient only (sorted)
-        if self.single_per_patient and (self.sort_col is not None):
-            return self.data[self.data[self.count_col].isin(sampled_ids)].sort_values(self.sort_col).drop_duplicates("empi_anon", keep="first")  # type: ignore
-
-        # single-per-patient only (arbitrary selection)
-        # TODO: default here is to select first, do we add ability to randomly choose etc.?
-        elif self.single_per_patient:
-            return self.data[self.data[self.count_col].isin(sampled_ids)].drop_duplicates("empi_anon", keep="first")  # type: ignore
-
-        # multiple-per-patient
-        else:
-            return self.data[self.data[self.count_col].isin(sampled_ids)]  # type: ignore
-
-    def __repr__(self):
-        return f"Node({self.name} | Target: {self.target_n} | Cap: {self.capacity} | Strict: {self.strict})"
-
-
-# --- Main Controller ---
-
-
-class TreeSampler:
-    """Orchestrates the stratified sampling process.
-
-    Builds the tree, balances targets, and executes the greedy sampling.
-
-    Attributes:
-        n: Total target sample size.
-        features: list of Feature configurations.
-        seed: Random seed.
-        count_col: Column used for ID/Capacity counting (e.g., patient ID).
-        single_per_patient: If True, only one row per count_col ID is sampled.
-    """
-
-    def __init__(
-        self,
-        n: int,
-        features: list[Feature],
-        seed: int = 13,
-        count_col: str = "empi_anon",
-        sort_col: Optional[str] = "studydate_anon",
-        single_per_patient: bool = True,
-    ):
-        self.n = n
-        self.features = features
-        self.seed = seed
-        self.count_col = count_col
-        self.single_per_patient = single_per_patient
-        self.rng = random.Random(seed)
-        self.patients = []  # track used patients across sampling steps
-        self.sort_col: Optional[str] = sort_col
-
-    def sample_data(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Executes the full sampling pipeline."""
-        print("1. Building Tree...")
-        # create a dummy root node to hold the structure
-        root = SamplingNode(
-            "ROOT",
-            data,
-            self.n,
-            self.count_col,
-            self.single_per_patient,
-            {},
-            sort_col=self.sort_col,
-        )
-
-        # recursively build tree (pass 1)
-        self._build_tree(root, data, 0)
-
-        print("2. Balancing Tree (Hierarchical Spillover)...")
-        # this modifies target_n in place across the tree
-        unresolved = root.balance()
-        if unresolved > 0:
-            print(
-                f"Warning: Could not satisfy total sample size. Short by {unresolved}"
-            )
-
-        print("3. Sampling...")
-        # collect all leaves to perform the actual extraction
-        leaves = root.collect_leaves()
-
-        # standard greedy sampling loop
-        # we make a copy of leaves to work on
-        active_leaves = [l for l in leaves if l.target_n > 0]
-        final_samples = []
-
-        while active_leaves:
-            # sort: prioritize nodes with least 'safety margin' (Capacity - Target)
-            active_leaves.sort(key=lambda x: x.capacity - x.target_n)
-
-            # pick the most critical node
-            node = active_leaves[0]
-
-            # sample
-            sample_df = node.sample(self.rng)
-            final_samples.append(sample_df)
-
-            # record used patients
-            new_patients = sample_df[self.count_col].unique().tolist()
-            self.patients.extend(new_patients)
-
-            # remove this node from active list
-            active_leaves.pop(0)
-
-            # refresh other nodes (update capacities based on used patients)
-            if self.single_per_patient:
-                for l in active_leaves:
-                    l.refresh_ids(self.patients)
-
-        return (
-            pd.concat(final_samples, ignore_index=True)
-            if final_samples
-            else pd.DataFrame()
-        )
-
-    def _build_tree(self, parent_node: SamplingNode, data: pd.DataFrame, f_idx: int):
-        """Recursively constructs the sampling tree."""
-        if f_idx >= len(self.features):
-            return
-
-        feature = self.features[f_idx]
-
-        # calculate theoretical targets for children
-        parent_n = parent_node.target_n
-        remaining_n = parent_n
-
-        # --- BALANCED MODE: Equal distribution across levels ---
-        if feature.balanced:
-            n_levels = len(feature.levels)
-            base_target = parent_n // n_levels
-            extra = parent_n % n_levels
-
-            for i, level in enumerate(feature.levels):
-                # Distribute remainder across first 'extra' levels
-                target = base_target + (1 if i < extra else 0)
-
-                # slice data
-                level_df = data.query(level.query)
-                if feature.label_col:
-                    level_df = level_df.copy()
-                    level_df[feature.label_col] = level.label
-
-                # update route
-                new_route = parent_node.route.copy()
-                new_route[feature.name] = str(level.name)
-
-                # create node
-                child_node = SamplingNode(
-                    name=f"{feature.name}={level.name}",
-                    data=level_df,
-                    target_n=target,
-                    count_col=self.count_col,
-                    single_per_patient=self.single_per_patient,
-                    route=new_route,
-                    strict=level.strict,
-                    resampling_weight=level.resampling_weight,
-                    sort_col=self.sort_col,
-                )
-
-                parent_node.add_child(child_node)
-
-                # recurse
-                self._build_tree(child_node, level_df, f_idx + 1)
-
-        # --- STANDARD MODE: Use weights/counts ---
-        else:
-            for i, level in enumerate(feature.levels):
-                is_last_level = i == len(feature.levels) - 1
-
-                # --- Target Calculation ---
-                # determine target, then check if we need to force-fix it
-                # to ensure conservation of mass
-
-                if level.count is not None and f_idx == 0:
-                    target = level.count
-                elif level.cond_weights and parent_node.route:
-                    w = 1.0
-                    for req_feat, weight_map in level.cond_weights.items():
-                        prev_val = parent_node.route.get(req_feat)
-                        w *= weight_map.get(prev_val, 1.0)
-                    target = int(w * parent_n)
-                else:
-                    target = int(level.weight * parent_n)
-
-                # force last level to take remainder
-                if is_last_level:
-                    target = remaining_n
-
-                remaining_n -= target
-
-                # slice data
-                level_df = data.query(level.query)
-                if feature.label_col:
-                    level_df = level_df.copy()
-                    level_df[feature.label_col] = level.label
-
-                # update route
-                new_route = parent_node.route.copy()
-                new_route[feature.name] = str(level.name)
-
-                # create node
-                child_node = SamplingNode(
-                    name=f"{feature.name}={level.name}",
-                    data=level_df,
-                    target_n=target,
-                    count_col=self.count_col,
-                    single_per_patient=self.single_per_patient,
-                    route=new_route,
-                    strict=level.strict,
-                    resampling_weight=level.resampling_weight,
-                    sort_col=self.sort_col,
-                )
-
-                parent_node.add_child(child_node)
-
-                # recurse
-                self._build_tree(child_node, level_df, f_idx + 1)
+        return result
