@@ -173,7 +173,9 @@ class FeatureConstraint(BaseConstraint):
         if labels and len(labels) != len(levels):
             raise ValueError(f"Feature '{name}': Mismatch between levels and labels.")
 
-    def link(self, child: "FeatureConstraint", levels: Optional[list[str]] = None) -> None:
+    def link(
+        self, child: "FeatureConstraint", levels: Optional[list[str]] = None
+    ) -> None:
         """attaches a child constraint to specific levels of this feature.
 
         Args:
@@ -244,9 +246,13 @@ class FeatureConstraint(BaseConstraint):
                     # collect all valid paths for each child
                     child_path_groups: Optional[list[list[list[PathStep]]]] = []
                     for child in children:
-                        c_paths: list[list[PathStep]] = child.get_valid_paths(row_idx, data)
+                        c_paths: list[list[PathStep]] = child.get_valid_paths(
+                            row_idx, data
+                        )
                         if not c_paths:
-                            child_path_groups = None  # failed a required child constraint
+                            child_path_groups = (
+                                None  # failed a required child constraint
+                            )
                             break
                         child_path_groups.append(c_paths)
 
@@ -298,7 +304,9 @@ class FeatureConstraint(BaseConstraint):
         """
         # filter variables: get all vars that passed through the parent node (if any)
         # and group them by the levels of this feature
-        vars_by_level: dict[str, list[pulp.LpVariable]] = {lvl: [] for lvl in self.levels}
+        vars_by_level: dict[str, list[pulp.LpVariable]] = {
+            lvl: [] for lvl in self.levels
+        }
         all_vars_in_scope: list[pulp.LpVariable] = []
 
         for row_idx, paths in lp_vars.items():
@@ -311,7 +319,9 @@ class FeatureConstraint(BaseConstraint):
                     continue
 
                 # find the step corresponding to this feature
-                step: Optional[PathStep] = next((s for s in path if s.feature_name == self.name), None)
+                step: Optional[PathStep] = next(
+                    (s for s in path if s.feature_name == self.name), None
+                )
                 if step:
                     vars_by_level[step.level_name].append(var)
                     all_vars_in_scope.append(var)
@@ -435,10 +445,14 @@ class HomogeneityConstraint(BaseConstraint):
         # bucket variables by {feature_value -> {group -> [vars]}}
         target_levels: list[str] = sorted(data[self.feature].astype(str).unique())
         groups: list[str] = list(self.weights.keys())
-        buckets: dict[str, dict[str, list[pulp.LpVariable]]] = {lvl: {g: [] for g in groups} for lvl in target_levels}
+        buckets: dict[str, dict[str, list[pulp.LpVariable]]] = {
+            lvl: {g: [] for g in groups} for lvl in target_levels
+        }
 
         # track all variables relevant to this constraint for global sums
-        all_relevant_vars: dict[str, list[pulp.LpVariable]] = {lvl: [] for lvl in target_levels}
+        all_relevant_vars: dict[str, list[pulp.LpVariable]] = {
+            lvl: [] for lvl in target_levels
+        }
 
         for row_idx, paths in lp_vars.items():
             row_feat_val: str = str(data.at[row_idx, self.feature])
@@ -464,7 +478,9 @@ class HomogeneityConstraint(BaseConstraint):
         for lvl in target_levels:
             # sum of all groups for this feature level to act as the "global total"
             # note: must use pulp.lpSum to delay evaluation until solve time
-            total_count_expr: pulp.LpAffineExpression = pulp.lpSum(all_relevant_vars[lvl])
+            total_count_expr: pulp.LpAffineExpression = pulp.lpSum(
+                all_relevant_vars[lvl]
+            )
 
             # if no vars exist for this level at all, skip
             if len(all_relevant_vars[lvl]) == 0:
@@ -484,8 +500,12 @@ class HomogeneityConstraint(BaseConstraint):
                 if self.strictness >= 1.0:
                     prob += lhs - rhs == 0, f"HardHomo_{self.feature}_{lvl}_{group}"
                 else:
-                    pos: pulp.LpVariable = pulp.LpVariable(f"h_pos_{lvl}_{group}", lowBound=0)
-                    neg: pulp.LpVariable = pulp.LpVariable(f"h_neg_{lvl}_{group}", lowBound=0)
+                    pos: pulp.LpVariable = pulp.LpVariable(
+                        f"h_pos_{lvl}_{group}", lowBound=0
+                    )
+                    neg: pulp.LpVariable = pulp.LpVariable(
+                        f"h_neg_{lvl}_{group}", lowBound=0
+                    )
 
                     prob += (
                         lhs - rhs + pos - neg == 0,
@@ -553,22 +573,43 @@ class LPSampler:
         constraints: list[BaseConstraint],
         n: int,
         strict: bool = True,
+        preselected: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """main execution pipeline for sampling data.
 
         Args:
-            data: source dataframe to sample from.
+            data: source dataframe to sample from. should not overlap with preselected.
             features: the root feature_constraint object defining hierarchy.
             constraints: list of global constraints (uniqueness, homogeneity).
-            n: desired sample size.
+            n: desired sample size (including any preselected rows).
             strict: if true, fails if exact n cannot be met. if false, maximizes size up to n.
+            preselected: optional dataframe of rows that must appear in the output. these rows
+                are pinned as selected and count toward n, so only n - len(preselected) new
+                rows are drawn from data. useful for modifying an existing sample by replacing
+                a subset of rows. all preselected rows must satisfy the root feature constraints.
 
         Returns:
             sampled dataframe with n rows (or fewer if strict=false and infeasible).
 
         Raises:
             ValueError: if no rows match the root feature constraints.
+            ValueError: if preselected rows cannot be matched to any valid feature path.
+            ValueError: if len(preselected) >= n.
         """
+
+        # merge preselected rows into a single working frame with a clean integer index.
+        # preselected rows occupy indices [0, len(preselected)) so they can be tracked.
+        preselected_indices: set[int] = set()
+        if preselected is not None and len(preselected) > 0:
+            if len(preselected) >= n:
+                raise ValueError(
+                    f"preselected has {len(preselected)} rows which meets or exceeds n={n}. "
+                    "no sampling is needed."
+                )
+            _data: pd.DataFrame = pd.concat([preselected, data], ignore_index=True)
+            preselected_indices = set(range(len(preselected)))
+        else:
+            _data = data
 
         # initialize problem
         prob: pulp.LpProblem = pulp.LpProblem("GranularSampler", pulp.LpMaximize)
@@ -579,8 +620,8 @@ class LPSampler:
         all_vars_flat: list[pulp.LpVariable] = []
 
         # optimization: only iterate rows once
-        for idx in data.index:
-            valid_paths: list[list[PathStep]] = features.get_valid_paths(idx, data)
+        for idx in _data.index:
+            valid_paths: list[list[PathStep]] = features.get_valid_paths(idx, _data)
 
             if valid_paths:
                 row_vars: dict[PathSignature, pulp.LpVariable] = {}
@@ -598,19 +639,35 @@ class LPSampler:
         if not all_vars_flat:
             raise ValueError("no rows in data matched the root feature constraints.")
 
+        # validate and pin preselected rows before applying any other constraints
+        if preselected_indices:
+            missing: list[int] = [
+                idx for idx in preselected_indices if idx not in lp_vars
+            ]
+            if missing:
+                raise ValueError(
+                    f"{len(missing)} preselected row(s) matched no valid path through the "
+                    "feature hierarchy and cannot be pinned. check that all preselected rows "
+                    "satisfy the root feature constraints."
+                )
+            for idx in preselected_indices:
+                prob += pulp.lpSum(lp_vars[idx].values()) == 1, f"Pinned_{idx}"
+
         # apply constraints
         penalty_terms: list[Any] = []
 
         # root feature (recursive)
-        features.apply(prob, data, lp_vars, penalty_terms)
+        features.apply(prob, _data, lp_vars, penalty_terms)
 
         # global constraints
         for constr in constraints:
-            constr.apply(prob, data, lp_vars, penalty_terms)
+            constr.apply(prob, _data, lp_vars, penalty_terms)
 
         # define objective function
         total_selected: pulp.LpAffineExpression = pulp.lpSum(all_vars_flat)
-        total_penalty: pulp.LpAffineExpression = pulp.lpSum(penalty_terms)  # sum the list into one expression
+        total_penalty: pulp.LpAffineExpression = pulp.lpSum(
+            penalty_terms
+        )  # sum the list into one expression
 
         if strict:
             prob += total_selected == n, "StrictSize"
@@ -657,7 +714,7 @@ class LPSampler:
                     break
 
         # build result dataframe
-        result: pd.DataFrame = data.loc[selected_rows].copy()
+        result: pd.DataFrame = _data.loc[selected_rows].copy()
 
         # inject labels
         # identify all label columns that were used
