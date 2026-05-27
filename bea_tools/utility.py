@@ -1,5 +1,5 @@
-from typing import Optional, Literal, Any
 import pickle
+from typing import Any, Literal, Optional
 
 
 def divider(
