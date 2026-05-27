@@ -1,4 +1,5 @@
-from typing import Optional, Literal
+from typing import Optional, Literal, Any
+import pickle
 
 
 def divider(
@@ -166,3 +167,11 @@ def aligned(
         final_str = frame_str + (" " * rem_line)
 
     return final_str
+
+def save_pickle(value: list[Any], file_path: str) -> None:
+    with open(file_path, "wb") as f:
+        pickle.dump(value, f)
+
+def load_pickle(file_path: str) -> list[Any]:
+    with open(file_path, "rb") as f:
+        return pickle.load(f)
