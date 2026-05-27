@@ -17,6 +17,16 @@ def balanced_feature_data() -> pd.DataFrame:
     )
 
 
+@pytest.fixture
+def balanced_feature_data_for_n10() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "row_id": list(range(20)),
+            "group": ["A"] * 10 + ["B"] * 10,
+        }
+    )
+
+
 def _cbc_sampler() -> LPSampler:
     sampler = LPSampler(verbose_solver=False)
     sampler.solver = pulp.getSolver("PULP_CBC_CMD", timeLimit=30, msg=False)
@@ -56,3 +66,25 @@ def test_non_unit_weights_are_normalized_with_warning() -> None:
 
     assert sum(feature.weights) == pytest.approx(1.0)
     assert feature.weights == pytest.approx([0.5, 0.5])
+
+
+def test_strict_tiny_weight_rounds_to_nearest_feasible_count(
+    balanced_feature_data_for_n10: pd.DataFrame,
+) -> None:
+    feature = FeatureConstraint(
+        name="group",
+        levels=["A", "B"],
+        weights=[0.01, 0.99],
+        strictness=1.0,
+    )
+
+    sampled = _cbc_sampler().sample_data(
+        data=balanced_feature_data_for_n10,
+        features=feature,
+        constraints=[UniquenessConstraint(id_col="row_id")],
+        n=10,
+        strict=True,
+    )
+
+    assert len(sampled) == 10
+    assert sampled["group"].value_counts().to_dict() == {"B": 10}

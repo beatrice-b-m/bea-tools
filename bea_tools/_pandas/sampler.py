@@ -115,7 +115,7 @@ class FeatureConstraint(BaseConstraint):
         levels: list of possible values/levels for this feature.
         weights: target distribution weights for each level (must sum to 1.0).
         how: matching strategy, either 'equals' or 'contains'.
-        strictness: constraint strictness (1.0 = hard, <1.0 = soft).
+        strictness: constraint strictness (1.0 = strict deviation minimization, <1.0 = soft).
         label_col: optional output column name for labeling selected rows.
         labels: custom labels for each level (defaults to level names).
         children: nested child constraints mapped by level.
@@ -147,7 +147,7 @@ class FeatureConstraint(BaseConstraint):
             levels: list of possible values/levels for this feature.
             weights: target distribution weights for each level. defaults to uniform.
             how: matching strategy, either 'equals' or 'contains'. defaults to 'equals'.
-            strictness: constraint strictness (1.0 = hard, <1.0 = soft). defaults to 1.0.
+            strictness: constraint strictness (1.0 = strict deviation minimization, <1.0 = soft). defaults to 1.0.
             label_col: optional output column name for labeling selected rows.
             labels: custom labels for each level. defaults to level names.
 
@@ -397,18 +397,28 @@ class FeatureConstraint(BaseConstraint):
         penalty_terms: list[Any],
         name: str,
     ) -> None:
-        """adds a soft or hard equality constraint based on strictness.
+        """adds a soft equality-style constraint based on strictness.
+
+        for strictness >= 1.0, keeps integer feasibility by minimizing absolute
+        deviation from rhs instead of forcing exact equality to potentially
+        fractional targets.
 
         Args:
             prob: the active PuLP problem.
             lhs: left-hand side expression.
             rhs: right-hand side expression.
-            strictness: constraint strictness (>=1.0 = hard, <1.0 = soft).
+            strictness: constraint strictness (>=1.0 = strict deviation minimization, <1.0 = soft).
             penalty_terms: list to accumulate penalty expressions.
             name: unique name for the constraint.
         """
         if strictness >= 1.0:
-            prob += lhs == rhs, f"HardDist_{name}"
+            pos: pulp.LpVariable = pulp.LpVariable(f"strict_slack_pos_{name}", lowBound=0)
+            neg: pulp.LpVariable = pulp.LpVariable(f"strict_slack_neg_{name}", lowBound=0)
+
+            prob += lhs - rhs + pos - neg == 0, f"StrictDist_{name}"
+
+            penalty_weight: float = 100.0 * (1 + 10.0 * strictness)
+            penalty_terms.append(penalty_weight * (pos + neg))
         elif strictness > 0.0:
             pos: pulp.LpVariable = pulp.LpVariable(f"slack_pos_{name}", lowBound=0)
             neg: pulp.LpVariable = pulp.LpVariable(f"slack_neg_{name}", lowBound=0)
