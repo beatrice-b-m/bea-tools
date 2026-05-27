@@ -7,6 +7,7 @@ import pulp
 import warnings
 import uuid
 import itertools
+import math
 
 
 # core structures
@@ -153,25 +154,58 @@ class FeatureConstraint(BaseConstraint):
         Raises:
             ValueError: if levels and weights have different lengths.
             ValueError: if levels and labels have different lengths.
+            ValueError: if levels are empty.
+            ValueError: if provided weights are invalid for normalization.
         """
         self.name = name
         self.levels = levels
-        self.weights = weights or [1.0 / len(levels)] * len(levels)
         self.how = how  # 'equals' or 'contains'
         self.strictness = strictness
         self.label_col = label_col
         self.labels = labels if labels else levels
 
+        # validation
+        if not self.levels:
+            raise ValueError(f"Feature '{name}': levels cannot be empty.")
+        if labels and len(labels) != len(levels):
+            raise ValueError(f"Feature '{name}': Mismatch between levels and labels.")
+
+        raw_weights: list[float] = (
+            list(weights) if weights is not None else [1.0 / len(levels)] * len(levels)
+        )
+        if len(self.levels) != len(raw_weights):
+            raise ValueError(f"Feature '{name}': Mismatch between levels and weights.")
+
+        try:
+            parsed_weights: list[float] = [float(weight) for weight in raw_weights]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Feature '{name}': weights must be numeric values."
+            ) from exc
+
+        if any((not math.isfinite(weight)) for weight in parsed_weights):
+            raise ValueError(f"Feature '{name}': weights must be finite values.")
+        if any(weight < 0 for weight in parsed_weights):
+            raise ValueError(f"Feature '{name}': weights must be non-negative.")
+
+        total_weight: float = sum(parsed_weights)
+        if total_weight <= 0:
+            raise ValueError(
+                f"Feature '{name}': weights must sum to a positive value."
+            )
+
+        if not math.isclose(total_weight, 1.0, rel_tol=1e-9, abs_tol=1e-9):
+            warnings.warn(
+                f"Feature '{name}': weights sum to {total_weight:.12g}; "
+                "normalizing to 1.0."
+            )
+
+        self.weights = [weight / total_weight for weight in parsed_weights]
+
         # hierarchy: map level_name -> list[child_constraints]
         self.children: dict[str, list[FeatureConstraint]] = {
             lvl: [] for lvl in self.levels
         }
-
-        # validation
-        if len(self.levels) != len(self.weights):
-            raise ValueError(f"Feature '{name}': Mismatch between levels and weights.")
-        if labels and len(labels) != len(levels):
-            raise ValueError(f"Feature '{name}': Mismatch between levels and labels.")
 
     def link(
         self, child: "FeatureConstraint", levels: Optional[list[str]] = None
