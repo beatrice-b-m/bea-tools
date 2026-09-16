@@ -8,8 +8,12 @@ from bea_tools._explore import (
     explore,
     grain,
     infer_schema,
+    joint_counts,
     levels,
+    render_html,
     render_plaintext,
+    render_svg,
+    visualization_data,
 )
 
 # Accessor modules are deliberately lightweight. Their import makes ordinary
@@ -65,6 +69,10 @@ __all__ = [
     "explore",
     "grain",
     "infer_schema",
+    "joint_counts",
     "levels",
+    "render_html",
     "render_plaintext",
+    "render_svg",
+    "visualization_data",
 ]

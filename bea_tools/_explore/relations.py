@@ -299,6 +299,20 @@ def pairs(
             "source": _source(df),
             "scopes": [],
             "pairs": records,
+            "features": [normalize_scalar(c, label=True).to_dict() for c in selected],
+            "contexts": [
+                [
+                    {
+                        "column": normalize_scalar(c, label=True).to_dict(),
+                        "value": normalize_scalar(v).to_dict(),
+                    }
+                    for c, v in sorted(
+                        context.items(),
+                        key=lambda item: normalize_scalar(item[0], label=True).sort_key(),
+                    )
+                ]
+                for context in contexts
+            ],
             "absence_status": "computed" if include_absence else "not_requested",
             "requested_pairs": len(requested_pairs),
             "processed_pairs": len(processed_pairs),
@@ -308,5 +322,84 @@ def pairs(
             "omitted_contexts": 1 + len(requested_context_values) - len(contexts),
             "scope_metadata": scope_metadata,
             "warnings": [],
+        },
+    )
+
+
+def joint_counts(
+    df: pd.DataFrame,
+    dimensions: Iterable[Any],
+    *,
+    context: Mapping[Any, Any] | None = None,
+    dropna: bool = False,
+    max_cells: int = 2500,
+) -> ExplorerResult:
+    """Compute observed joint counts for one selected pair, on demand.
+
+    ``max_cells`` bounds the supported-domain Cartesian product (including blank
+    heatmap cells). Exceeding it raises rather than silently dropping cell mass.
+    Context columns must be disjoint from the selected pair.
+    """
+    selected = resolve_columns(df, dimensions, argument="dimensions")
+    if len(selected) != 2:
+        raise ValueError("joint_counts requires exactly two dimensions")
+    if max_cells is None:
+        raise ValueError("max_cells must be a positive integer")
+    validate_limit("max_cells", max_cells, zero=False)
+    context = context or {}
+    context_columns = resolve_columns(df, context, argument="context") if context else ()
+    if set(context_columns) & set(selected):
+        raise ValueError("context columns must be disjoint from the analyzed pair")
+    encoded = {c: encode_series(df[c]) for c in (*selected, *context_columns)}
+    mask = np.ones(len(df), dtype=bool)
+    if dropna:
+        for values, codes in encoded.values():
+            if MISSING in values:
+                mask &= codes != values.index(MISSING)
+    eligible = int(mask.sum())
+    for column, value in context.items():
+        values, codes = encoded[column]
+        token = normalize_scalar(value)
+        if token not in values:
+            mask[:] = False
+        else:
+            mask &= codes == values.index(token)
+    a_values, a_codes = encoded[selected[0]]
+    b_values, b_codes = encoded[selected[1]]
+    a_supported = sorted(set(a_codes[mask].tolist()), key=lambda c: a_values[c].sort_key())
+    b_supported = sorted(set(b_codes[mask].tolist()), key=lambda c: b_values[c].sort_key())
+    if len(a_supported) * len(b_supported) > max_cells:
+        raise ValueError(
+            "Selected pair exceeds max_cells; narrow the context or increase the budget"
+        )
+    a_indexes = {code: i for i, code in enumerate(a_supported)}
+    b_indexes = {code: i for i, code in enumerate(b_supported)}
+    pair_ids, code_pairs = exact_pair_ids(a_codes[mask], b_codes[mask])
+    sizes = np.bincount(pair_ids, minlength=len(code_pairs))
+    cells = [
+        {"a": a_indexes[a], "b": b_indexes[b], "count": int(size)}
+        for (a, b), size in zip(code_pairs, sizes)
+    ]
+    cells.sort(key=lambda c: (c["a"], c["b"]))
+    evaluated = int(mask.sum())
+    return ExplorerResult(
+        "joint_counts",
+        {
+            "status": "computed" if evaluated else "empty",
+            "source": _source(df),
+            "columns": [normalize_scalar(c, label=True).to_dict() for c in selected],
+            "context": [
+                {
+                    "column": normalize_scalar(c, label=True).to_dict(),
+                    "value": normalize_scalar(v).to_dict(),
+                }
+                for c, v in context.items()
+            ],
+            "scopes": [
+                _scope("joint", len(df), len(df) - eligible, eligible - evaluated, bool(context))
+            ],
+            "a": [a_values[c].to_dict() for c in a_supported],
+            "b": [b_values[c].to_dict() for c in b_supported],
+            "cells": cells,
         },
     )

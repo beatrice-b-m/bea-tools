@@ -49,3 +49,20 @@ long/hostile labels, and omission budgets. Inspect generated SVG/HTML and run th
 existing explorer and package regression suites. Optional icicles and automatic
 entity discovery are outside this implementation; aligned bars supply the
 requested quantitative census view.
+
+## Completed implementation
+
+- Schema `0.3` exposes the common-scope graph, complete key comparisons, scoped
+  feature evidence, equivalent-key nodes, reduced edges, and feature assignments.
+- Public `render_svg()`, `render_html()`, and `visualization_data()` cover the
+  planned surfaces. The HTML grain view includes compact collapsed cards,
+  feature evidence, focus, matrix, and exception controls. Pair metadata retains
+  requested features and evaluated contexts even when pair budgets leave cells
+  untested.
+- `joint_counts()` computes selected-pair cells on demand with an explicit
+  supported-domain product budget. The example gallery exercises all surfaces.
+- Validation: 86 package tests pass; explorer lint is clean; offline source and
+  wheel builds succeed. The SVG gallery was rasterized and visually inspected.
+  HTML event handlers passed an isolated JavaScript harness. Live browser preview
+  of the local file was blocked by the browser URL policy, so browser interaction
+  verification remains a limitation of this run.

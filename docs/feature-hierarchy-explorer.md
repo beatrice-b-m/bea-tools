@@ -196,3 +196,132 @@ such as site, include it in `candidate_keys`. Composite keys use `KeySpec` and
 remain atomic. Adding a candidate with missing values can change the common
 population; always inspect the graph scope. Conditional `explore()` grain
 sections carry the original population accounting and cohort lineage into it.
+
+## Graphical outputs
+
+`render_svg()` produces a standalone static figure; `render_html()` produces a
+standalone interactive document. Both accept an `ExplorerResult` or its dictionary
+and require no optional packages, Graphviz executable, remote assets, or running
+server. They consume the result's evidence without accessing the dataframe.
+Combined `explore()` results default to the grain map; use `section="levels"`,
+`"census"`, or `"pairs"` for another section. An unrequested section raises an
+actionable error instead of inventing evidence.
+
+```python
+from pathlib import Path
+from bea_tools import KeySpec, grain, render_svg, render_html, visualization_data
+
+result = grain(df, ["exam_id", KeySpec("exam_side", ("exam_id", "side"))])
+Path("grain.svg").write_text(render_svg(result), encoding="utf-8")
+Path("grain.html").write_text(render_html(result), encoding="utf-8")
+
+# Inline notebook figure:
+from IPython.display import SVG, display
+display(SVG(render_svg(result)))
+
+# Explicitly filtered structure for an agent or another rendering client:
+structural_summary = visualization_data(result, detail="topology")
+```
+
+The native SVG layout orders candidates by structural depth and input key order,
+with content-sized cards and coarse-to-fine arrows. Counts never control card area
+or edge thickness. Equivalent keys appear together, composite components remain
+in one heading, shared features are labeled, and unplaced features stay visible.
+Long labels wrap. Dense or wide graphs can be scrolled in the HTML view; use the
+matrix or focus controls when the map is crowded. Layout is deterministic rather
+than optimized for minimum edge crossings.
+
+The HTML grain view supports:
+
+- Selecting a feature in a card, matrix, or menu to highlight its assignments and
+  open the candidate-by-candidate evidence table. Key components can be selected
+  through the menu or matrix. Full tables show violations, singleton/repeated
+  support, affected rows, and population accounting.
+- Switching between map and candidate-key × target-feature matrix. Matrix cells
+  distinguish constant, varying, undefined, and untested evidence. An asterisk
+  marks a different target population; those cells do not justify map placement.
+- Hiding attribute lists, focusing a key and its immediate neighbors while other
+  connections stay dimly visible, and showing varying features as an optional
+  exception overlay. Exceptions never change the exact hierarchy.
+
+For static variants, use `render_svg(result, view="matrix")` or
+`render_svg(result, show_exceptions=True)`.
+
+| Section | Full view | Topology view |
+| --- | --- | --- |
+| Grain | Layered cards, support, selectable evidence | Same groupings and placement; qualitative evidence |
+| Levels | Frequency bars, explicit missingness, omitted mass | Canonically ordered typed labels |
+| Census | Expandable HTML tree and static aligned bars | Uniform paths with qualitative omissions |
+| Pairs | Directional mapping matrix or separate Cramér's V layer | Mapping classes only |
+
+Level bars use each feature's evaluated population. Census bars use the root
+population, and HTML also reports each branch's share of its parent. Omitted
+levels/branches have their own mass rather than redistributing it to visible
+entries. HTML census branches collapse through the arrow buttons; the static
+figure remains available underneath. Missing values are labeled `<NA>` when
+included, and missing exclusions appear in the full population captions.
+
+Pair cells describe row-feature → column-feature mapping, with `1:n` reversed to
+`n:1` in the opposite direction. `view="association"` selects Cramér's V for
+static SVG; HTML supplies an encoding selector. Association is unavailable in
+topology mode. Global and contextual matrices retain the same feature order and
+are drawn separately. The context selector keeps the global comparison visible;
+cell titles explain each population. Analysis budget omissions remain explicit,
+and untested pairs are not treated as undefined or as observed relationships.
+An unconditioned matrix can itself use a conditional census cohort: its cell
+population captions retain that distinction.
+
+### Selected-pair joint cells
+
+Complete joint frequencies are computed only when requested directly:
+
+```python
+from bea_tools import joint_counts, render_svg
+
+cells = joint_counts(
+    df, ["side", "finding"],
+    # context={"site": "North"},  # optional; disjoint from the selected pair
+    dropna=False,
+    max_cells=2500,
+)
+Path("joint.svg").write_text(render_svg(cells), encoding="utf-8")
+```
+
+`joint_counts()` returns canonically ordered typed `a` and `b` domains, sparse
+observed `cells` with domain indexes and counts, context predicates, and a scope.
+Missingness is evaluated across the selected pair and context columns before
+context restriction. `max_cells` bounds the full supported-domain product,
+including blank heatmap cells; exceeding it raises rather than dropping mass.
+Choose a narrower context or explicitly increase the budget. Full heatmaps use
+cell counts; topology heatmaps show uniform observed-cell marks. Blank cells mean
+unobserved within the displayed scope, not impossible combinations.
+
+### Disclosure and compatibility
+
+All graphic renderers first call `visualization_data()`, an allowlisted projection.
+Topology exports contain no raw analytical JSON, counts, shares, support metrics,
+association strengths, frequency ranks, quantity-controlled styling, or hidden
+quantitative tooltips. This applies to the entire HTML file, including inactive
+views and evidence tables. Frequency-ranked levels and census siblings are
+canonically reordered, and presentation IDs are assigned after that ordering.
+The compact projection also provides structural evidence to text/agent consumers;
+full projections retain quantitative evidence independently of audience.
+
+Topology is still a presentation policy, not de-identification: names, values,
+observed structure, qualitative failures, and the effects of analytical selection
+remain visible. Share the rendered export or the reviewed projection, not
+`result.to_dict()`, when quantities must remain internal. The renderers do not
+mutate the analytical result. Missing graph evidence in older saved results
+requires recomputing `grain()`; target-specific equivalences are never used as a
+fallback global graph.
+
+Run the executable gallery example to generate all supported surfaces in both
+modes, plus the grain matrix and exception figure:
+
+```bash
+python examples/observed_grain_graph.py /tmp/bea-explorer-figures
+```
+
+The [implementation plan](observed-grain-visualization-plan.md) records the scope
+and evidence rules. Optional icicle layouts and automatic entity/composite-key
+discovery are not included.

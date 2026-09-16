@@ -85,7 +85,7 @@ observed functional-dependency evidence, sparse pair summaries, and strict JSON
 results:
 
 ```python
-from bea_tools import KeySpec, explore, render_plaintext
+from bea_tools import KeySpec, explore, render_plaintext, render_svg, render_html
 
 result = explore(
     frame,
@@ -95,11 +95,21 @@ result = explore(
 )
 print(render_plaintext(result))
 
+# Primary graphical output: observed grain cards and feature placements.
+from pathlib import Path
+Path("grain.svg").write_text(render_svg(result), encoding="utf-8")
+Path("grain.html").write_text(render_html(result), encoding="utf-8")
+
 # Share layout and qualitative relationships without counts or distributions.
 external_context = render_plaintext(result, detail="topology")
 ```
 
-See the [feature hierarchy explorer guide](docs/feature-hierarchy-explorer.md)
+SVG and interactive HTML also support levels, census, and pair matrices through
+`section=`. Both provide full and topology-only exports without extra dependencies.
+See [graphical output usage](docs/feature-hierarchy-explorer.md#graphical-outputs)
+and the [executable gallery](examples/observed_grain_graph.py).
+
+See the [feature hierarchy explorer guide](docs/feature-hierarchy-explorer.md),
 the [hands-on review notebook](examples/feature-hierarchy-explorer.ipynb), and
 the [implementation plan](docs/feature-hierarchy-explorer-plan.md).
 
