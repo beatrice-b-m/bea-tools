@@ -218,3 +218,76 @@ def test_render_does_not_require_result_serialization() -> None:
     assert render_plaintext(NoSerialization(result.kind, result.payload)) == render_plaintext(
         result
     )
+
+
+def test_topology_detail_suppresses_quantities_and_canonicalizes_ranked_values() -> None:
+    frame = pd.DataFrame(
+        {
+            "id": [1, 1, 2, 3],
+            "site": ["Z", "Z", "Z", "A"],
+            "kind": ["x", "y", "x", "x"],
+            "finding": ["ok", "bad", "ok", None],
+        }
+    )
+    result = explore(
+        frame,
+        ["site", "kind"],
+        features=["site", "kind", "finding"],
+        candidate_keys=["id"],
+        include_absence=True,
+        reference_domains={"site": ["A", "Z", "Q"], "kind": ["x", "y"]},
+    )
+    text = render_plaintext(result, detail="topology", width=120)
+    assert "Topology display (quantitative evidence suppressed)" in text
+    assert text.index("    'A'") < text.index("    'Z'")
+    assert text.index("  site='A'") < text.index("  site='Z'")
+    assert "observed dependency holds" in text
+    assert "observed dependency fails" in text
+    assert "observed relation: n:m (many-to-many)" in text
+    assert "unobserved example: 'A' / 'y'" in text
+    assert "domain site: caller declared" in text
+    forbidden = (
+        " evaluated / ",
+        " excluded:",
+        " rows",
+        " row",
+        " levels;",
+        " support:",
+        " violating groups",
+        " affected rows",
+        "Cramer's V",
+        "domain cells",
+        " cells",
+        "cardinality",
+        "missing rows",
+    )
+    assert not any(fragment in text for fragment in forbidden)
+
+
+def test_topology_detail_uses_nonquantitative_omission_markers() -> None:
+    frame = pd.DataFrame({"site": ["Z"] * 6 + ["A"] * 4})
+    analysis_limited = render_plaintext(census(frame, ["site"], top_n=1), detail="topology")
+    assert "child branches omitted (top_n)" in analysis_limited
+    assert "4 rows" not in analysis_limited
+    renderer_limited = render_plaintext(census(frame, ["site"]), detail="topology", max_nodes=0)
+    assert "additional nodes not rendered (renderer max_nodes)" in renderer_limited
+    assert "2 nodes" not in renderer_limited
+    level_limited = render_plaintext(levels(frame, ["site"], top_n=1), detail="topology")
+    assert "additional levels not reported (analysis limits)" in level_limited
+
+
+def test_topology_detail_suppresses_schema_metrics_and_support_counts() -> None:
+    frame = pd.DataFrame({"id": [1, 2], "value": ["a", "b"]})
+    text = render_plaintext(infer_schema(frame, candidate_keys=["id"]), detail="topology")
+    assert "id: suggested id" in text
+    assert "dtype:" in text
+    assert "name hint id: True" in text
+    assert "id: holds=True" in text
+    assert "cardinality" not in text
+    assert "missing rows" not in text
+    assert "groups" not in text
+
+
+def test_topology_detail_rejects_unknown_mode() -> None:
+    with pytest.raises(ValueError, match="detail"):
+        render_plaintext(levels(pd.DataFrame({"a": [1]})), detail="summary")

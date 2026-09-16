@@ -122,6 +122,45 @@ render one section to inspect more detail:
 print(render_plaintext(combined["sections"]["pairs"], width=100, max_lines=100))
 ```
 
+### Topology-only display
+
+Use `detail="topology"` when the recipient needs the dataset layout but should
+not receive its size or distribution evidence:
+
+```python
+external_context = render_plaintext(
+    combined,
+    detail="topology",
+    width=100,
+    max_lines=200,
+)
+print(external_context)
+```
+
+This mode retains column and level labels, observed hierarchy paths, qualitative
+functional-dependency results, pair relation classes, contexts, declared-domain
+sources, and bounded examples of unobserved combinations. It suppresses:
+
+- row, level, node, pair, context, group, cell, and domain sizes;
+- shares, missing/excluded population totals, affected-row and support totals;
+- Cramér's V, cardinality ratios, missing-row counts, and other schema metrics;
+- quantitative omission markers and low-retained-fraction warnings.
+
+Values ranked by frequency in the analytical result are sorted canonically for
+display, so their printed order does not reveal relative prevalence. Omission
+markers remain, without quantities, so the recipient can distinguish a complete
+display from one limited by `top_n`, `max_levels`, `max_nodes`, `max_lines`, pair,
+context, or absence-example budgets.
+
+Topology mode is a presentation filter, not de-identification. It intentionally
+reveals column names, categorical values, observed paths, context values,
+dependency outcomes, pair relation classes, and unobserved examples. A result
+created with frequency-based selection such as `top_n` can also reveal that its
+included values passed that selection, even though their display order is
+canonical. Review those labels and choices before sending the text outside your
+environment. The original `ExplorerResult` still contains all quantitative data;
+share only the rendered string when those fields must remain internal.
+
 Safe mode escapes non-ASCII and terminal controls. Native Unicode display requires
 `bea-tools[unicode]` and clips by terminal cell width. Programmatic consumers should
 use typed JSON fields rather than parsing this presentation format.

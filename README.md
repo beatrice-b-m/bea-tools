@@ -24,6 +24,9 @@ result = explore(
     top_n=5,
 )
 print(render_plaintext(result))
+
+# Share layout and qualitative relationships without counts or distributions.
+external_context = render_plaintext(result, detail="topology")
 ```
 
 See the [feature hierarchy explorer guide](docs/feature-hierarchy-explorer.md)

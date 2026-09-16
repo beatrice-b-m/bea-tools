@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from collections.abc import Iterator, Mapping
-from typing import Any
+from typing import Any, Literal
 
 from .encoding import ScalarIdentity, display_scalar, validate_limit
 from .result import ExplorerResult
@@ -78,8 +78,15 @@ def _scope_text(scope: Mapping[str, Any]) -> str:
 
 
 def _section_lines(
-    kind: str, data: Mapping[str, Any], *, max_nodes: int, missing_label: str
+    kind: str,
+    data: Mapping[str, Any],
+    *,
+    max_nodes: int,
+    missing_label: str,
+    detail: Literal["full", "topology"],
 ) -> Iterator[str]:
+    show_quantities = detail == "full"
+
     def label(record: Mapping[str, Any], *, column: bool = False) -> str:
         if column and record["type"] == "string" and record["value"].isidentifier():
             return record["value"]
@@ -88,10 +95,13 @@ def _section_lines(
     def omission(node: Mapping[str, Any], indent: str) -> Iterator[str]:
         if node.get("omitted_child_rows"):
             reasons = ", ".join(node.get("stop_reasons", [])) or "output limits"
-            yield (
-                f"{indent}... {_quantity(node['omitted_child_rows'], 'row')} in "
-                f"{_quantity(node['omitted_child_levels'], 'child level')} omitted ({reasons})"
-            )
+            if show_quantities:
+                yield (
+                    f"{indent}... {_quantity(node['omitted_child_rows'], 'row')} in "
+                    f"{_quantity(node['omitted_child_levels'], 'child level')} omitted ({reasons})"
+                )
+            else:
+                yield f"{indent}... child branches omitted ({reasons})"
 
     scopes = {scope["scope_id"]: scope for scope in data.get("scopes", [])}
     metadata = data.get("scope_metadata") or {}
@@ -112,37 +122,61 @@ def _section_lines(
         return
     if metadata.get("scope"):
         yield f"  cohort from {metadata['source_scope']}"
-        yield f"    {_scope_text(metadata['scope'])}"
+        if show_quantities:
+            yield f"    {_scope_text(metadata['scope'])}"
     for warning in data.get("warnings", []):
-        detail = ", ".join(f"{key}={value!r}" for key, value in warning.items() if key != "code")
-        yield f"  Warning: {warning['code']}" + (f" ({detail})" if detail else "")
+        if not show_quantities and warning["code"] == "LOW_RETAINED_FRACTION":
+            continue
+        warning_detail = ", ".join(
+            f"{key}={value!r}" for key, value in warning.items() if key != "code"
+        )
+        yield f"  Warning: {warning['code']}" + (
+            f" ({warning_detail})" if warning_detail and show_quantities else ""
+        )
 
     if kind == "levels":
         for feature in data.get("per_feature", []):
             scope = scopes[feature["scope_id"]]
-            yield (
-                f"  {label(feature['column'], column=True)}: "
-                f"{feature['levels_reported']}/{feature['levels_total']} levels; "
-                f"{feature['reported_rows']}/{scope['evaluated_rows']} evaluated rows reported"
-            )
-            if scope["missing_excluded_rows"] or scope["restriction_excluded_rows"]:
-                yield f"    {_scope_text(scope)}"
-            for level in feature.get("levels", []):
-                yield f"    {label(level['value'])}: {_quantity(level['count'], 'row')}"
-            if feature["omitted_levels"]:
+            column = label(feature["column"], column=True)
+            if show_quantities:
                 yield (
-                    f"    ... {_quantity(feature['omitted_levels'], 'level')} / "
-                    f"{_quantity(feature['unreported_rows'], 'row')} not reported"
+                    f"  {column}: {feature['levels_reported']}/{feature['levels_total']} levels; "
+                    f"{feature['reported_rows']}/{scope['evaluated_rows']} evaluated rows reported"
                 )
+            else:
+                yield f"  {column}"
+            if show_quantities and (
+                scope["missing_excluded_rows"] or scope["restriction_excluded_rows"]
+            ):
+                yield f"    {_scope_text(scope)}"
+            levels = feature.get("levels", [])
+            if not show_quantities:
+                levels = sorted(levels, key=lambda level: _identity(level["value"]).sort_key())
+            for level in levels:
+                rendered = label(level["value"])
+                yield (
+                    f"    {rendered}: {_quantity(level['count'], 'row')}"
+                    if show_quantities
+                    else f"    {rendered}"
+                )
+            if feature["omitted_levels"]:
+                if show_quantities:
+                    yield (
+                        f"    ... {_quantity(feature['omitted_levels'], 'level')} / "
+                        f"{_quantity(feature['unreported_rows'], 'row')} not reported"
+                    )
+                else:
+                    yield "    ... additional levels not reported (analysis limits)"
     elif kind == "census":
         tree = data.get("tree", {})
         scope = scopes.get(tree.get("scope_id"))
-        if scope:
+        if scope and show_quantities:
             yield f"  {_scope_text(scope)}"
         features = {f["feature_id"]: label(f["column"], column=True) for f in data["features"]}
         yield "  path: " + " > ".join(features[f] for f in tree["dimensions"])
         root = tree["root"]
-        yield f"  total: {_quantity(root['count'], 'row')}"
+        if show_quantities:
+            yield f"  total: {_quantity(root['count'], 'row')}"
         yield from omission(root, "    ")
         nodes = tree.get("nodes", [])
         # Keep the producer's ancestor-closed budget allocation, but print each
@@ -157,6 +191,9 @@ def _section_lines(
         }
         for node in retained:
             children[node["parent_id"]].append(node)
+        if not show_quantities:
+            for siblings in children.values():
+                siblings.sort(key=lambda node: _identity(values[node["level_id"]]).sort_key())
         stack = [iter(children[root["node_id"]])]
         while stack:
             node = next(stack[-1], None)
@@ -164,15 +201,18 @@ def _section_lines(
                 stack.pop()
                 continue
             indent = "  " * len(stack)
-            yield (
-                f"{indent}{features[node['feature_id']]}={label(values[node['level_id']])}: "
-                f"{_quantity(node['count'], 'row')}"
-            )
+            rendered = f"{indent}{features[node['feature_id']]}={label(values[node['level_id']])}"
+            if show_quantities:
+                rendered += f": {_quantity(node['count'], 'row')}"
+            yield rendered
             yield from omission(node, indent + "  ")
             if children.get(node["node_id"]):
                 stack.append(iter(children[node["node_id"]]))
         if len(nodes) > len(retained):
-            yield f"  ... {len(nodes) - len(retained)} nodes not rendered (renderer max_nodes)"
+            if show_quantities:
+                yield f"  ... {len(nodes) - len(retained)} nodes not rendered (renderer max_nodes)"
+            else:
+                yield "  ... additional nodes not rendered (renderer max_nodes)"
     elif kind == "grain":
         yield "  Observed dependencies; sample evidence does not establish semantic grain."
         for dependency in data.get("dependencies", []):
@@ -185,19 +225,26 @@ def _section_lines(
             if state is None:
                 reason = dependency["undefined_reason"].replace("_", " ")
                 yield f"    observed dependency undefined ({reason})"
+            elif not show_quantities:
+                yield f"    observed dependency {'holds' if state else 'fails'}"
             else:
                 yield (
                     f"    observed dependency {'holds' if state else 'fails'}; "
                     f"{dependency['violating_groups']}/{dependency['evaluated_groups']} "
                     f"violating groups; {dependency['affected_rows']} affected rows"
                 )
-            yield (
-                f"    support: {dependency['evaluated_rows']} rows; "
-                f"{dependency['singleton_groups']} singleton, "
-                f"{dependency['repeated_groups']} repeated groups"
-            )
+            if show_quantities:
+                yield (
+                    f"    support: {dependency['evaluated_rows']} rows; "
+                    f"{dependency['singleton_groups']} singleton, "
+                    f"{dependency['repeated_groups']} repeated groups"
+                )
             scope = scopes.get(dependency["scope_id"])
-            if scope and (scope["missing_excluded_rows"] or scope["restriction_excluded_rows"]):
+            if (
+                show_quantities
+                and scope
+                and (scope["missing_excluded_rows"] or scope["restriction_excluded_rows"])
+            ):
                 yield f"    {_scope_text(scope)}"
         for target in data.get("targets", []):
             name = label(target["target"], column=True)
@@ -217,10 +264,13 @@ def _section_lines(
             data.get("requested_contexts", 0) - data.get("processed_contexts", 0),
         )
         if data.get("omitted_pairs") or omitted_contexts:
-            yield (
-                f"  omitted: {data.get('omitted_pairs', 0)} requested pairs, "
-                f"{omitted_contexts} requested contexts (output limits)"
-            )
+            if show_quantities:
+                yield (
+                    f"  omitted: {data.get('omitted_pairs', 0)} requested pairs, "
+                    f"{omitted_contexts} requested contexts (output limits)"
+                )
+            else:
+                yield "  ... requested pairs or contexts omitted (output limits)"
         yield "  A / B is left / right; relations describe observed pairs only."
         yield "  Pair support does not rule out higher-order constraints."
         for pair in data.get("pairs", []):
@@ -233,7 +283,8 @@ def _section_lines(
                 or "global"
             )
             yield f"  {names[0]} / {names[1]} [{context}]"
-            yield f"    {_scope_text(pair['scope'])}"
+            if show_quantities:
+                yield f"    {_scope_text(pair['scope'])}"
             relation = pair["relation"]
             meanings = {
                 "1:1": "one-to-one",
@@ -245,43 +296,59 @@ def _section_lines(
                 yield f"    relation undefined ({pair['relation_reason'].replace('_', ' ')})"
             else:
                 yield f"    observed relation: {relation} ({meanings[relation]})"
-            association = pair["cramers_v"]
-            v_text = (
-                f"{association:.6g}"
-                if association is not None
-                else f"undefined ({pair['cramers_v_reason'].replace('_', ' ')})"
-            )
-            yield f"    Cramer's V: {v_text}"
+            if show_quantities:
+                association = pair["cramers_v"]
+                v_text = (
+                    f"{association:.6g}"
+                    if association is not None
+                    else f"undefined ({pair['cramers_v_reason'].replace('_', ' ')})"
+                )
+                yield f"    Cramer's V: {v_text}"
             absence = pair.get("absence")
             if absence:
                 domains = pair["domains"]
-                yield (
-                    f"    unobserved: {absence['absent_cells']}/{absence['total_cells']} "
-                    "domain cells (not evidence of impossibility)"
-                )
-                for side, name in zip(("a", "b"), names):
+                if show_quantities:
                     yield (
-                        f"    domain {name}: {domains[side + '_size']} levels "
-                        f"({domains[side + '_source'].replace('_', ' ')})"
+                        f"    unobserved: {absence['absent_cells']}/{absence['total_cells']} "
+                        "domain cells (not evidence of impossibility)"
                     )
-                classes = absence["classes"]
-                yield f"    zero support in cohort: {classes['unobserved_zero_support']} cells"
-                yield f"    level absent in context: {classes['level_absent_under_parent']} cells"
-                yield f"    within supported margins: {classes['unobserved_within_supported_margins']} cells"
+                else:
+                    yield "    unobserved combinations (not evidence of impossibility)"
+                for side, name in zip(("a", "b"), names):
+                    if show_quantities:
+                        yield (
+                            f"    domain {name}: {domains[side + '_size']} levels "
+                            f"({domains[side + '_source'].replace('_', ' ')})"
+                        )
+                    else:
+                        yield f"    domain {name}: {domains[side + '_source'].replace('_', ' ')}"
+                if show_quantities:
+                    classes = absence["classes"]
+                    yield f"    zero support in cohort: {classes['unobserved_zero_support']} cells"
+                    yield f"    level absent in context: {classes['level_absent_under_parent']} cells"
+                    yield (
+                        "    within supported margins: "
+                        f"{classes['unobserved_within_supported_margins']} cells"
+                    )
                 for example in absence["examples"]:
                     yield f"      unobserved example: {label(example['a'])} / {label(example['b'])}"
                 if absence["examples_omitted"]:
-                    yield f"    ... {absence['examples_omitted']} unobserved examples not reported"
+                    if show_quantities:
+                        yield f"    ... {absence['examples_omitted']} unobserved examples not reported"
+                    else:
+                        yield "    ... additional unobserved examples not reported"
     elif kind == "schema_proposal":
         for proposal in data.get("proposals", []):
             yield f"  {label(proposal['column'], column=True)}: suggested {proposal['proposed_role']}"
             for reason in proposal["reasons"]:
-                yield f"    {reason['code'].lower().replace('_', ' ')}: {reason['value']}"
+                if show_quantities or reason["code"] in {"DTYPE", "NAME_HINT_ID"}:
+                    yield f"    {reason['code'].lower().replace('_', ' ')}: {reason['value']}"
             evidence = proposal["fd_evidence"]
             if isinstance(evidence, Mapping):
                 yield f"    dependency evidence: {evidence['status']}"
                 for key in evidence["keys"]:
-                    yield f"      {key['name']}: holds={key['holds']}, {key['evaluated_groups']} groups"
+                    suffix = f", {key['evaluated_groups']} groups" if show_quantities else ""
+                    yield f"      {key['name']}: holds={key['holds']}{suffix}"
             else:
                 yield f"    dependency evidence: {evidence.replace('_', ' ')}"
 
@@ -294,12 +361,16 @@ def render_plaintext(
     max_nodes: int = 1000,
     missing_label: str = "<NA>",
     unicode_mode: str = "safe",
+    detail: Literal["full", "topology"] = "full",
 ) -> str:
     """Render bounded, terminal-safe evidence, with explicit populations and omissions.
 
     Strings are quoted. Census nodes retain the producer's budget order but are
-    displayed parent-first with contiguous subtrees. A final truncation marker
-    replaces the last line only when further content actually exists.
+    displayed parent-first with contiguous subtrees. ``detail="topology"`` keeps
+    labels and qualitative relationships while suppressing quantities and
+    distribution statistics. It also canonicalizes frequency-ranked siblings.
+    A final truncation marker replaces the last line only when further content
+    actually exists.
     """
 
     for name, value, zero in (
@@ -311,6 +382,8 @@ def render_plaintext(
             raise ValueError(f"{name} must be an integer")
         validate_limit(name, value, zero=zero)
     _safe("", unicode_mode)  # Validate even when the line budget is one.
+    if detail not in {"full", "topology"}:
+        raise ValueError("detail must be 'full' or 'topology'")
     if isinstance(result, ExplorerResult):
         data, kind, version = result.payload, result.kind, result.schema_version
     else:
@@ -318,14 +391,22 @@ def render_plaintext(
 
     def lines() -> Iterator[str]:
         yield f"bea-tools feature explorer v{version}"
+        if detail == "topology":
+            yield "Topology display (quantitative evidence suppressed)"
         sections = data.get("sections")
         if sections is not None:
             for section_kind, section in sections.items():
                 yield from _section_lines(
-                    section_kind, section, max_nodes=max_nodes, missing_label=missing_label
+                    section_kind,
+                    section,
+                    max_nodes=max_nodes,
+                    missing_label=missing_label,
+                    detail=detail,
                 )
         else:
-            yield from _section_lines(kind, data, max_nodes=max_nodes, missing_label=missing_label)
+            yield from _section_lines(
+                kind, data, max_nodes=max_nodes, missing_label=missing_label, detail=detail
+            )
 
     output: list[str] = []
     for line in lines():
