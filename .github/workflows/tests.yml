@@ -1,0 +1,46 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --group dev
+      - run: uv run --group dev pytest bea_tools/testing/explore bea_tools/testing/test_explore_imports.py -q
+      - run: uv run --group dev ruff check bea_tools/_explore bea_tools/testing/explore
+  extras:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --group dev --extra sampling --extra plotting --extra unicode
+      - run: uv run --group dev --extra sampling --extra plotting --extra unicode pytest bea_tools/testing -q
+      - run: uv build
+      - run: |
+          uv venv .wheel-smoke
+          uv pip install --python .wheel-smoke/bin/python dist/*.whl
+          cd /tmp
+          "$GITHUB_WORKSPACE/.wheel-smoke/bin/python" -c "import json, pandas as pd, bea_tools; json.dumps(bea_tools.census(pd.DataFrame({'x': [1]}), ['x']).to_dict(), allow_nan=False)"
+  floors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+      - run: uv venv --python 3.11 .floor-venv
+      - run: uv pip install --python .floor-venv/bin/python "numpy==1.26.4" "pandas==3.0.0" "pydicom==3.0.1" pytest .
+      - run: .floor-venv/bin/python -c "import numpy, pandas; print(numpy.__version__, pandas.__version__)"
+      - run: .floor-venv/bin/python -m pytest bea_tools/testing/explore bea_tools/testing/test_explore_imports.py -q
