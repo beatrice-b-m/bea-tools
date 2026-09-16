@@ -114,7 +114,11 @@ def explore(
             top_n_per_parent=top_n_per_parent,
             dropna=dropna,
         )
-        lineage = {"source_scope": "s2", "conditional": len(cohort) != len(df)}
+        lineage = {
+            "source_scope": "s2",
+            "conditional": len(cohort) != len(df),
+            "scope": census_result["scopes"][0],
+        }
     grain_frame = cohort if top_n_applies_to == "both" else df
     grain_data = (
         grain(
@@ -138,6 +142,7 @@ def explore(
             max_absence_cells=max_absence_cells,
             max_contexts=max_contexts,
             max_pairs=max_pairs,
+            scope_metadata=lineage,
         ).to_dict()
         if include_pairs
         else {"status": "not_requested"}

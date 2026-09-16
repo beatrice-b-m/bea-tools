@@ -43,8 +43,9 @@ def _fd_record(
     dropna: bool,
     scope_prefix: str,
     encoded: dict[Any, tuple[list[Any], np.ndarray]],
+    row_mask: np.ndarray | None = None,
 ) -> tuple[dict[str, Any], np.ndarray]:
-    mask = np.ones(len(df), dtype=bool)
+    mask = np.ones(len(df), dtype=bool) if row_mask is None else row_mask.copy()
     if dropna:
         for column in (*spec.columns, target):
             values, codes = encoded[column]
@@ -122,7 +123,17 @@ def grain(
                 encoded=encoded,
             )
             records.append(record)
-            scopes.append(record.pop("scope"))
+            scope = record.pop("scope")
+            scopes.append(
+                _scope(
+                    scope["scope_id"],
+                    len(df),
+                    scope["missing_excluded_rows"],
+                    0,
+                    bool((scope_metadata or {}).get("conditional")),
+                    parent_scope=(scope_metadata or {}).get("scope"),
+                )
+            )
             evaluated_sets[(spec.name, target)] = evaluated
             if record["holds"] is True:
                 holds_by_target[target].append(spec.name)
@@ -132,17 +143,30 @@ def grain(
         (record["key_name"], str(record["target"])): record["holds"] is True for record in records
     }
 
-    def determines_key(left: str, right: str) -> bool:
+    def determines_key(left: str, right: str, mask: np.ndarray) -> bool:
         left_columns = {
             normalize_scalar(column, label=True) for column in specs_by_name[left].columns
         }
-        return all(
-            normalize_scalar(component, label=True) in left_columns
-            or holds_lookup.get(
-                (left, str(normalize_scalar(component, label=True).to_dict())), False
-            )
-            for component in specs_by_name[right].columns
-        )
+        for component in specs_by_name[right].columns:
+            if normalize_scalar(component, label=True) in left_columns:
+                continue
+            if np.array_equal(evaluated_sets[(left, component)], mask):
+                holds = holds_lookup[(left, str(normalize_scalar(component, label=True).to_dict()))]
+            else:
+                # Key-to-key evidence must use the same rows as the target FDs.
+                evidence, _ = _fd_record(
+                    df,
+                    specs_by_name[left],
+                    component,
+                    dropna=dropna,
+                    scope_prefix="comparison",
+                    encoded=encoded,
+                    row_mask=mask,
+                )
+                holds = evidence["holds"] is True
+            if not holds:
+                return False
+        return True
 
     for target in df.columns:
         relevant = [
@@ -165,9 +189,12 @@ def grain(
         incomparable: list[list[str]] = []
         coarsest = list(determining)
         for index, left in enumerate(determining):
+            if not comparable:
+                break
             for right in determining[index + 1 :]:
-                left_right = determines_key(left, right)
-                right_left = determines_key(right, left)
+                mask = evaluated_sets[(left, target)]
+                left_right = determines_key(left, right, mask)
+                right_left = determines_key(right, left, mask)
                 if left_right and right_left:
                     equivalent.append([left, right])
                 elif not left_right and not right_left:

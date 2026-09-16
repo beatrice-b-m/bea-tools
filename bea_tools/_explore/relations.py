@@ -90,6 +90,7 @@ def pairs(
     max_absence_cells: int | None = 1000,
     max_contexts: int | None = 32,
     max_pairs: int | None = 15,
+    scope_metadata: dict[str, Any] | None = None,
 ) -> ExplorerResult:
     selected = resolve_columns(df, dimensions, argument="dimensions")
     validate_limit("max_absence_cells", max_absence_cells)
@@ -133,7 +134,7 @@ def pairs(
         b_values, b_codes = encoded[b_column]
         base_mask = np.ones(len(df), dtype=bool)
         if dropna:
-            for column in (a_column, b_column, *context_columns):
+            for column in (a_column, b_column):
                 values, codes = encoded[column]
                 if MISSING in values:
                     base_mask &= codes != values.index(MISSING)
@@ -150,6 +151,12 @@ def pairs(
         domain_b, source_b = _declared_domain(reference_domains, b_column, set(global_b))
         for context_index, context in enumerate(contexts):
             local_mask = base_mask.copy()
+            if dropna:
+                for column in context:
+                    values, codes = encoded[column]
+                    if MISSING in values:
+                        local_mask &= codes != values.index(MISSING)
+            eligible_rows = int(local_mask.sum())
             for column, raw_value in context.items():
                 values, codes = encoded[column]
                 wanted = normalize_scalar(raw_value)
@@ -199,9 +206,10 @@ def pairs(
                 "scope": _scope(
                     f"pair:{a_index}:{b_index}:context:{context_index}",
                     len(df),
-                    len(df) - len(base_rows),
-                    len(base_rows) - len(local_rows),
-                    bool(context),
+                    len(df) - eligible_rows,
+                    eligible_rows - len(local_rows),
+                    bool(context) or bool((scope_metadata or {}).get("conditional")),
+                    parent_scope=(scope_metadata or {}).get("scope"),
                 ),
                 "evaluated_rows": len(local_rows),
                 "relation": _relation(pair_counts),
@@ -297,6 +305,8 @@ def pairs(
             "omitted_pairs": len(requested_pairs) - len(processed_pairs),
             "requested_contexts": 1 + len(requested_context_values),
             "processed_contexts": len(contexts),
+            "omitted_contexts": 1 + len(requested_context_values) - len(contexts),
+            "scope_metadata": scope_metadata,
             "warnings": [],
         },
     )

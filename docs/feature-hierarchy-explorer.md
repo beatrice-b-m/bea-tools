@@ -53,3 +53,24 @@ does not prove that the real-world grain is finer.
 
 `DataFrame.bea.levels`, `.census`, `.grain`, `.explore`, and `.infer_schema`
 delegate to the same functions after an ordinary `import bea_tools`.
+
+## Population scopes
+
+Pair contexts are evaluated independently. With `dropna=True`, the unconditioned
+pair excludes missing values only in its two dimensions. A contextual pair also
+excludes missing values in that context's columns; requesting another context
+does not change either population. Absence domains and global support are based
+on the unconditioned pair population.
+
+In pre mode, pair analysis uses the census cohort. Grain uses that cohort only
+with `top_n_applies_to="both"`. These sections retain `scope_metadata` containing
+`source_scope`, `conditional`, and the parent `scope`. Each derived scope accounts
+for the original input rows, accumulates missing and restriction exclusions, and
+includes the census scope in its lineage. Section `source` describes the immediate
+input dataframe, which may be the cohort. Exclusions are disjoint: missingness is
+counted at each stage only among rows surviving earlier stages.
+
+Grain compares determinant relationships on the same rows used for the target's
+dependencies. When the candidate keys have different target populations, the
+comparison remains `not_comparable`; it does not infer equivalence or ordering
+from dependencies evaluated on other populations.

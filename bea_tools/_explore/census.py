@@ -43,7 +43,15 @@ def _scope(
     restriction_excluded_rows: int,
     conditional: bool,
     lineage: list[str] | None = None,
+    *,
+    parent_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if parent_scope is not None:
+        input_rows = parent_scope["input_rows"]
+        missing_excluded_rows += parent_scope["missing_excluded_rows"]
+        restriction_excluded_rows += parent_scope["restriction_excluded_rows"]
+        conditional = conditional or parent_scope["conditional"]
+        lineage = [*parent_scope["lineage"], parent_scope["scope_id"], *(lineage or [])]
     evaluated = input_rows - missing_excluded_rows - restriction_excluded_rows
     return {
         "scope_id": scope_id,
