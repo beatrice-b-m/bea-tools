@@ -41,6 +41,6 @@ jobs:
         with:
           python-version: "3.11"
       - run: uv venv --python 3.11 .floor-venv
-      - run: uv pip install --python .floor-venv/bin/python "numpy==1.26.4" "pandas==3.0.0" "pydicom==3.0.1" pytest .
+      - run: uv pip install --python .floor-venv/bin/python "numpy==1.26.4" "pandas==3.0.0" "pydicom==3.0.1" "pytest>=8.0" "hypothesis>=6.100" .
       - run: .floor-venv/bin/python -c "import numpy, pandas; print(numpy.__version__, pandas.__version__)"
       - run: .floor-venv/bin/python -m pytest bea_tools/testing/explore bea_tools/testing/test_explore_imports.py -q

@@ -47,6 +47,12 @@ uv run --group dev pytest bea_tools/testing -q
 uv run --group dev ruff check bea_tools/_explore bea_tools/testing/explore
 ```
 
+CI checks Python 3.11–3.13, optional dependencies, and a separate environment
+with the minimum supported runtime dependencies. The minimum-version job also
+installs pytest and Hypothesis so it runs the differential tests as well as the
+example-based tests. Hypothesis is a development dependency, not a runtime
+requirement.
+
 ### Install the checkout into an existing Python environment
 
 To use the in-development checkout as a package in an existing virtual or
