@@ -7,7 +7,7 @@ The explorer separates four questions that are easy to conflate:
 - `grain()` tests exact functional dependencies for keys you supply.
 - `explore()` combines those operations and can add pair/absence summaries.
 
-All outputs use schema version `0.2`, contain only standard-library data, and
+All outputs use schema version `0.3`, contain only standard-library data, and
 can be passed to `json.dumps(result.to_dict(), allow_nan=False)`. Values and
 column labels are typed, so booleans, integers, floats, strings, and missing
 values do not collapse into one another.
@@ -167,3 +167,32 @@ use typed JSON fields rather than parsing this presentation format.
 
 For a standalone conceptual overview with executed full/topology examples, see
 [the visualization design brief](feature-hierarchy-explorer-design-brief.md).
+
+## Common-scope observed-grain graph
+
+Schema `0.3` adds `grain_result["graph"]`; the existing `dependencies` and
+`targets` retain their target-specific populations and semantics. The graph has
+its own `scope`, `missingness`, complete directed `key_relationships`, support
+and dependency records, merged `nodes`, reduced coarse-to-fine `edges`, feature
+`assignments`, and explicit `unplaced` features.
+
+With `dropna=False`, every input row participates and missing values are levels.
+With `dropna=True`, the graph uses rows complete across every supplied key
+component. Target dependencies are evaluated within that population; if a target
+has further missing-value exclusions, its evidence has `scope_compatible=False`
+and a separate scope. That target is not assigned to the graph. Empty populations
+do not establish key equivalence, even for keys with identical components.
+
+Equivalent keys retain every supplied name in one node. Edges mean **finer
+grouping**, the reverse of a functional-dependency arrow. Only exact refinements
+enter the graph. Redundant skip-level edges are removed from the drawing while
+all tested key relationships remain available. Cross-cutting keys can share
+children. Features with multiple incomparable coarsest determinants are assigned
+to every such node; unsupported features are “Not placed by tested keys,” not
+assumed to be row-level. Key components are represented by their key headings.
+
+The graph is based only on supplied candidates. To include a categorical grouping
+such as site, include it in `candidate_keys`. Composite keys use `KeySpec` and
+remain atomic. Adding a candidate with missing values can change the common
+population; always inspect the graph scope. Conditional `explore()` grain
+sections carry the original population accounting and cohort lineage into it.

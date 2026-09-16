@@ -11,6 +11,7 @@ import pandas as pd
 
 from .census import _scope, _source
 from .encoding import MISSING, encode_series, normalize_scalar, resolve_columns, validate_frame
+from .grain_graph import build_grain_graph
 from .result import ExplorerResult, KeySpec
 
 
@@ -226,6 +227,10 @@ def grain(
             for spec in specs
         ],
         "dependencies": records,
+        "graph": build_grain_graph(
+            df, specs, encoded, records, evaluated_sets,
+            dropna=dropna, scope_metadata=scope_metadata,
+        ),
         "targets": target_summaries,
         "warnings": [],
         "scope_metadata": scope_metadata,
