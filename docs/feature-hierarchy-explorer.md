@@ -164,3 +164,6 @@ share only the rendered string when those fields must remain internal.
 Safe mode escapes non-ASCII and terminal controls. Native Unicode display requires
 `bea-tools[unicode]` and clips by terminal cell width. Programmatic consumers should
 use typed JSON fields rather than parsing this presentation format.
+
+For a standalone conceptual overview with executed full/topology examples, see
+[the visualization design brief](feature-hierarchy-explorer-design-brief.md).
