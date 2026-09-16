@@ -9,7 +9,7 @@ from typing import Any
 SCHEMA_VERSION = "0.3"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class ExplorerResult(Mapping[str, Any]):
     """Immutable top-level result with a strict-JSON-compatible payload."""
 
@@ -18,13 +18,36 @@ class ExplorerResult(Mapping[str, Any]):
     schema_version: str = SCHEMA_VERSION
     stability: str = "unstable"
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
+    def to_dict(self, *, resolve_references: bool = False) -> dict[str, Any]:
+        """Export compact JSON data, or an independent copy with references labeled.
+
+        Resolved exports retain IDs and typed values, adding local labels and
+        values for inspection. They contain all quantitative evidence; use
+        ``visualization_data(detail="topology")`` for disclosure filtering.
+        """
+        data = {
             "schema_version": self.schema_version,
             "stability": self.stability,
             "kind": self.kind,
             **self.payload,
         }
+        if resolve_references:
+            from .resolved import resolve_result
+
+            return resolve_result(data)
+        return data
+
+    def __repr__(self) -> str:
+        from .render import render_plaintext
+
+        return render_plaintext(self, width=100, max_lines=40, max_nodes=100)
+
+    def __str__(self) -> str:
+        return repr(self)
+
+    def _repr_pretty_(self, printer: Any, cycle: bool) -> None:
+        """Use the same bounded, escaped text in IPython and notebooks."""
+        printer.text("ExplorerResult(...)" if cycle else repr(self))
 
     def __getitem__(self, key: str) -> Any:
         return self.to_dict()[key]

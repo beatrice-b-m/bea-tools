@@ -54,6 +54,74 @@ does not prove that the real-world grain is finer.
 `DataFrame.bea.levels`, `.census`, `.grain`, `.explore`, and `.infer_schema`
 delegate to the same functions after an ordinary `import bea_tools`.
 
+## Inspecting results without looking up codes
+
+Printing a result, evaluating it interactively, or displaying it in a notebook
+now shows the plaintext view with actual column names and level values:
+
+```python
+result = census(df, ["side", "finding"])
+print(result)  # e.g. side='L', followed by finding='clear'
+```
+
+This default display is bounded to 100 characters per line, 40 lines, and 100
+census nodes, with explicit truncation notices. It includes quantitative evidence.
+Use `render_plaintext(result, ...)` to change the display budgets or request
+`detail="topology"`. `joint_counts()` also supports plaintext display, including
+named columns, context predicates, and observed cell values.
+
+The default `result.to_dict()` and mapping access remain compact: census nodes
+refer to `features` and `level_dictionary`, and graph links retain their IDs.
+For structured inspection without manual lookups, request a resolved export:
+
+```python
+readable = result.to_dict(resolve_references=True)
+node = readable["tree"]["nodes"][0]
+print(node["label"])         # side='L'
+print(node["column"])        # {'type': 'string', 'value': 'side'}
+print(node["value"])         # {'type': 'string', 'value': 'L'}
+print(node["parent_label"])  # All evaluated rows
+```
+
+Resolved exports preserve all original IDs, counts, ordering, and typed values;
+they add local names and values as follows:
+
+| Result | Added information |
+| --- | --- |
+| Census | Node `column`, `value`, `label`, and `parent_label`; tree `dimension_columns` and `dimension_labels`; named dictionary entries |
+| Pre-filter census selections | Retained-set `column`, `column_label`, typed `values`, predicate `labels`, and per-parent `path_values` predicates |
+| Levels | Feature `column_label`; each level's `column` and predicate `label` |
+| Grain | Key `column_labels`, evidence/assignment `target_label`, edge `source_keys`/`target_keys`, and assignment `node_keys` |
+| Pairs | `column_labels`, labeled context predicates, and absence examples with `a_column`, `b_column`, and `label` |
+| Joint counts | `column_labels`, labeled contexts, and cells with `a_column`, `b_column`, `a_value`, `b_value`, and `label`; `a`/`b` remain indexes |
+| Schema proposals and warnings | `column_label`, with typed warning `column` values |
+
+`explore()` resolves each computed section using its own feature mappings.
+Unrequested sections remain unrequested. The resolved dictionary is an independent
+copy, so editing it does not modify the result. Resolving requires no dataframe or
+recomputation, but repeated names and values increase export size. Display labels
+are for reading; typed fields distinguish values such as `1`, `1.0`, `True`,
+`'1'`, missingness, and the literal string `'<NA>'`. IDs remain necessary because
+the same level can occur under different parents. A `parent_label` names the
+immediate parent; use parent IDs to reconstruct the complete path.
+
+Feature warnings now carry their typed column and display its name. Census
+dictionaries include values referenced by pre-filter selections even when output
+budgets omit those nodes or another dimension's filter excludes those values.
+Older saved results that lack these dictionary entries must be recomputed before
+resolving their retained sets; resolution raises an actionable error in that case.
+These are additive changes to schema `0.3`.
+
+`visualization_data()` also includes labels beside references: census rows have
+`parent_label`; grain edges have `source_label`/`target_label`, features have
+`node_labels`, nodes have `attribute_labels`, and evidence has `feature_label`.
+Pair and joint cells include `a_label`/`b_label`. Structural IDs such as `c0`
+and `g0` remain available for linking, while readers can use the adjacent labels.
+These additions apply to both full and topology projections and preserve topology
+disclosure filtering. Resolved analytical exports are **not** disclosure-filtered;
+use `visualization_data(..., detail="topology")` or a topology renderer when
+quantities must be omitted.
+
 ## Population scopes
 
 Pair contexts are evaluated independently. With `dropna=True`, the unconditioned

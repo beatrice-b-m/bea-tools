@@ -131,6 +131,18 @@ def visualization_data(
                     }
                 )
             output["evidence"].append(projected)
+        feature_labels = {f["id"]: f["label"] for f in output["features"]}
+        node_labels = {n["id"]: " / ".join(n["titles"]) for n in output["nodes"]}
+        for feature in output["features"]:
+            feature["node_labels"] = [node_labels[n] for n in feature["nodes"]]
+        for node in output["nodes"]:
+            node["attribute_labels"] = [feature_labels[f] for f in node["attributes"]]
+        for edge in output["edges"]:
+            edge.update(
+                source_label=node_labels[edge["source"]], target_label=node_labels[edge["target"]]
+            )
+        for record in output["evidence"]:
+            record["feature_label"] = feature_labels[record["feature"]]
     elif kind == "levels":
         scopes = {s["scope_id"]: s for s in data["scopes"]}
         output["features"] = []
@@ -210,6 +222,9 @@ def visualization_data(
                     )
                 output["rows"].append(omitted)
             stack.extend((child, item_id) for child in reversed(descendants))
+        row_labels = {row["id"]: row["label"] for row in output["rows"]}
+        for row in output["rows"]:
+            row["parent_label"] = row_labels.get(row["parent"])
     elif kind == "pairs":
         output["contexts"] = []
         contexts = {}
@@ -245,6 +260,8 @@ def visualization_data(
             item = {
                 "a": indexes[str(record["columns"][0])],
                 "b": indexes[str(record["columns"][1])],
+                "a_label": label(record["columns"][0], column=True),
+                "b_label": label(record["columns"][1], column=True),
                 "relation": record["relation"] or "undefined",
                 "scope": _scope(record["scope"], full),
             }
@@ -261,7 +278,13 @@ def visualization_data(
         output["a"] = [label(v) for v in data["a"]]
         output["b"] = [label(v) for v in data["b"]]
         output["cells"] = [
-            {"a": c["a"], "b": c["b"], **({"count": c["count"]} if full else {})}
+            {
+                "a": c["a"],
+                "b": c["b"],
+                "a_label": output["a"][c["a"]],
+                "b_label": output["b"][c["b"]],
+                **({"count": c["count"]} if full else {}),
+            }
             for c in data["cells"]
         ]
         output["caption"] = "Observed joint cells; blank cells are unobserved in this scope."

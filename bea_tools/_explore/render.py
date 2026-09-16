@@ -112,6 +112,7 @@ def _section_lines(
         "grain": "Grain",
         "pairs": "Pairs",
         "schema_proposal": "Schema proposals (suggestions)",
+        "joint_counts": "Joint counts",
     }
     if kind not in titles:
         yield f"Unsupported result kind: {kind!r}"
@@ -124,14 +125,26 @@ def _section_lines(
         yield f"  cohort from {metadata['source_scope']}"
         if show_quantities:
             yield f"    {_scope_text(metadata['scope'])}"
+    warning_columns = {
+        f["feature_id"]: f["column"]
+        for f in (data.get("per_feature", []) if kind == "levels" else data.get("features", []))
+        if isinstance(f, Mapping) and "feature_id" in f
+    }
     for warning in data.get("warnings", []):
         if not show_quantities and warning["code"] == "LOW_RETAINED_FRACTION":
             continue
+        column = warning.get("column", warning_columns.get(warning.get("feature_id")))
+        named = f" (column={label(column, column=True)})" if column is not None else ""
         warning_detail = ", ".join(
-            f"{key}={value!r}" for key, value in warning.items() if key != "code"
+            f"{key}={value!r}"
+            for key, value in warning.items()
+            if key not in {"code", "column", "column_label"}
+            and not (key == "feature_id" and column is not None)
         )
-        yield f"  Warning: {warning['code']}" + (
-            f" ({warning_detail})" if warning_detail and show_quantities else ""
+        yield (
+            f"  Warning: {warning['code']}"
+            + named
+            + (f" ({warning_detail})" if warning_detail and show_quantities else "")
         )
 
     if kind == "levels":
@@ -337,6 +350,26 @@ def _section_lines(
                         yield f"    ... {absence['examples_omitted']} unobserved examples not reported"
                     else:
                         yield "    ... additional unobserved examples not reported"
+    elif kind == "joint_counts":
+        if show_quantities:
+            for scope in scopes.values():
+                yield f"  {_scope_text(scope)}"
+        names = [label(c, column=True) for c in data["columns"]]
+        context = (
+            ", ".join(
+                f"{label(p['column'], column=True)}={label(p['value'])}"
+                for p in data.get("context", [])
+            )
+            or "global"
+        )
+        yield f"  {names[0]} / {names[1]} [{context}]"
+        yield "  Observed cells; absence in this population does not imply impossibility."
+        for cell in data["cells"]:
+            text = (
+                f"    {names[0]}={label(data['a'][cell['a']])}, "
+                f"{names[1]}={label(data['b'][cell['b']])}"
+            )
+            yield text + (f": {_quantity(cell['count'], 'row')}" if show_quantities else "")
     elif kind == "schema_proposal":
         for proposal in data.get("proposals", []):
             yield f"  {label(proposal['column'], column=True)}: suggested {proposal['proposed_role']}"

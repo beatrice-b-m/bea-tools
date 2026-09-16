@@ -69,12 +69,15 @@ def _rank_counts(counts: dict[int, int], values: list[ScalarIdentity]) -> list[t
     return sorted(counts.items(), key=lambda item: (-item[1], values[item[0]].sort_key()))
 
 
-def _mixed_warning(feature_id: str, values: Iterable[ScalarIdentity]) -> dict[str, Any] | None:
+def _mixed_warning(
+    feature_id: str, column: Any, values: Iterable[ScalarIdentity]
+) -> dict[str, Any] | None:
     families = sorted({value.kind for value in values if value is not MISSING})
     if len(families) > 1:
         return {
             "code": "MIXED_LEVEL_TYPES",
             "feature_id": feature_id,
+            "column": normalize_scalar(column, label=True).to_dict(),
             "families": families,
         }
     return None
@@ -147,7 +150,7 @@ def levels(
                 "levels": output_levels,
             }
         )
-        warning = _mixed_warning(feature_id, values)
+        warning = _mixed_warning(feature_id, column, values)
         if warning:
             warnings.append(warning)
         role = (schema or {}).get(column)
@@ -156,6 +159,7 @@ def levels(
                 {
                     "code": "EXPLICIT_ROLE_SELECTION",
                     "feature_id": feature_id,
+                    "column": normalize_scalar(column, label=True).to_dict(),
                     "role": role,
                 }
             )
@@ -308,7 +312,7 @@ def census(
         for index, column in enumerate(active)
     ]
     for index, values in enumerate(dictionaries):
-        warning = _mixed_warning(f"f{index}", values)
+        warning = _mixed_warning(f"f{index}", active[index], values)
         if warning:
             warnings.append(warning)
         role = (schema or {}).get(active[index])
@@ -317,6 +321,7 @@ def census(
                 {
                     "code": "EXPLICIT_ROLE_SELECTION",
                     "feature_id": f"f{index}",
+                    "column": normalize_scalar(active[index], label=True).to_dict(),
                     "role": role,
                 }
             )
@@ -410,6 +415,12 @@ def census(
             emitted_levels.add((depth, code))
             if depth + 1 < len(active):
                 queue.append((node_id, depth + 1, child_rows, count))
+    # Pre-selection metadata must remain decodable even when no corresponding
+    # tree node survives the output budgets or the conjunctive pre filter.
+    referenced_levels = emitted_levels.copy()
+    for retained in retained_metadata:
+        referenced_levels.update((retained["depth"] - 1, code) for code in retained["level_codes"])
+        referenced_levels.update(enumerate(retained.get("path", [])))
     level_dictionary = [
         {
             "level_id": f"f{depth}:l{code}",
@@ -417,7 +428,7 @@ def census(
             "value": dictionaries[depth][code].to_dict(),
         }
         for depth, code in sorted(
-            emitted_levels,
+            referenced_levels,
             key=lambda item: (item[0], dictionaries[item[0]][item[1]].sort_key()),
         )
     ]
