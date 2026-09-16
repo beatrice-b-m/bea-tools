@@ -4,8 +4,78 @@ A Python package of personal data science/analysis focused functions and tools t
 
 ## Installation
 
+Install the latest published release from PyPI:
+
 ```bash
-pip install bea-tools
+python -m pip install bea-tools
+```
+
+Optional features are available as extras:
+
+```bash
+python -m pip install 'bea-tools[sampling]'  # PuLP sampler
+python -m pip install 'bea-tools[plotting]'  # matplotlib helpers
+python -m pip install 'bea-tools[unicode]'   # native-width Unicode rendering
+```
+
+Multiple extras can be installed together, for example:
+
+```bash
+python -m pip install 'bea-tools[sampling,plotting,unicode]'
+```
+
+## Development installation
+
+The repository uses [uv](https://docs.astral.sh/uv/) to create a locked
+development environment. After installing uv, clone the repository and sync
+the project with its development tools and optional dependencies:
+
+```bash
+git clone https://github.com/beatrice-b-m/bea-tools.git
+cd bea-tools
+uv sync --group dev --extra sampling --extra plotting --extra unicode
+```
+
+`uv sync` creates (or updates) `.venv` and installs the checked-out package in
+editable mode. Source-code changes are therefore available to commands run
+with `uv run` without reinstalling the package.
+
+Run the test suite and linter from the repository root:
+
+```bash
+uv run --group dev pytest bea_tools/testing -q
+uv run --group dev ruff check bea_tools/_explore bea_tools/testing/explore
+```
+
+### Install the checkout into an existing Python environment
+
+To use the in-development checkout as a package in an existing virtual or
+Conda environment, activate that environment and run this from the repository
+root:
+
+```bash
+python -m pip install --editable .
+```
+
+To include optional features, specify one or more extras on the editable
+requirement:
+
+```bash
+python -m pip install --editable '.[sampling,plotting,unicode]'
+```
+
+Using `python -m pip` ensures the package is installed into the environment
+owned by that `python`. If the environment is not activated, uv can target its
+interpreter explicitly:
+
+```bash
+uv pip install --python /path/to/environment/bin/python --editable .
+```
+
+Confirm which checkout is being imported with:
+
+```bash
+python -c "import bea_tools; print(bea_tools.__file__)"
 ```
 
 ## Feature hierarchy explorer
@@ -39,14 +109,6 @@ the [implementation plan](docs/feature-hierarchy-explorer-plan.md).
 - pandas >= 3.0
 - NumPy >= 1.26 (subject to pandas/Python compatibility)
 - pydicom (for DICOM utilities)
-
-Optional features are isolated from the core install:
-
-```bash
-pip install 'bea-tools[sampling]'  # PuLP sampler
-pip install 'bea-tools[plotting]'  # matplotlib helpers
-pip install 'bea-tools[unicode]'   # native-width Unicode rendering
-```
 
 ## License
 
