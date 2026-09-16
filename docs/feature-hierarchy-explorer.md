@@ -43,7 +43,7 @@ combined = explore(
     reference_domains={"side": ["L", "R", "U"]},
     include_absence=True,
 )
-print(render_plaintext(combined, width=80, max_lines=40))
+print(render_plaintext(combined, width=100, max_lines=120))
 ```
 
 An omitted combination is only unobserved in the stated scope. Output limits
@@ -74,3 +74,54 @@ Grain compares determinant relationships on the same rows used for the target's
 dependencies. When the candidate keys have different target populations, the
 comparison remains `not_comparable`; it does not infer equivalence or ordering
 from dependencies evaluated on other populations.
+
+## Reading the plaintext view
+
+`render_plaintext()` accepts an explorer result or its dictionary, including an
+individual section of `explore()`. Census nodes are displayed in depth-first order
+using their parent links. Each line names its dimension, and siblings retain the
+producer's ranking. The underlying JSON stays in its deterministic breadth-first
+budget order. For example:
+
+```text
+  total: 3 rows
+  site='North': 2 rows
+    modality='CT': 1 row
+    modality='MRI': 1 row
+  site='South': 1 row
+    modality='CT': 1 row
+```
+
+The view includes:
+
+- Evaluated/input row counts, missing and restriction exclusions, and conditional
+  cohort labels. Root totals remain visible for a census with `max_nodes=0`.
+- Omitted child rows and levels with their stopping reasons; omitted level-count
+  mass; and requested pairs/contexts excluded by their budgets.
+- Quoted, escaped string values, so `1`, `'1'`, `True`, `'True'`, `<NA>`, and
+  `'<NA>'` stay distinct. Ordinary identifier column names remain unquoted.
+- Named pairs and context predicates, relation orientation, and explicit reasons
+  for undefined associations. Cramér's V is displayed with six significant digits;
+  JSON retains the numeric result.
+- Absence domain sources and sizes, separate zero-support/context-absent/supported-
+  margin counts, and bounded examples. These describe unobserved cells, not
+  impossible combinations.
+- Observed dependency truth, violating/evaluated groups, affected rows, singleton
+  and repeated-group support, undefined reasons, and determinant comparisons.
+- Schema proposals with their reasons and dependency evidence, plus analysis warnings.
+
+`width`, `max_lines`, and renderer `max_nodes` are finite integer display budgets.
+The renderer's node budget selects an ancestor-closed prefix of the census's node
+list, then prints those nodes by subtree. It does not change the analytical result.
+Long lines end with `...`; a final `max_lines` marker appears only when additional
+content exists, within the requested line budget. A separate `max_nodes` notice
+identifies nodes hidden only by the renderer. Increase the display budgets or
+render one section to inspect more detail:
+
+```python
+print(render_plaintext(combined["sections"]["pairs"], width=100, max_lines=100))
+```
+
+Safe mode escapes non-ASCII and terminal controls. Native Unicode display requires
+`bea-tools[unicode]` and clips by terminal cell width. Programmatic consumers should
+use typed JSON fields rather than parsing this presentation format.

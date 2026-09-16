@@ -146,21 +146,26 @@ def normalize_scalar(value: Any, *, label: bool = False) -> ScalarIdentity:
 
 
 def display_scalar(value: ScalarIdentity, missing_label: str = "<NA>") -> str:
+    """Display typed values without conflating strings with numbers or missingness."""
+
     if value.kind == "missing":
         return missing_label
     if value.kind == "string":
-        return repr(value.value) if value.value == missing_label else value.value
-    if value.kind == "integer":
-        return value.value
-    if value.kind == "float":
-        if value.value in {"inf", "-inf"}:
-            return value.value
-        return repr(float.fromhex(value.value))
-    if value.kind == "boolean":
-        return "True" if value.value else "False"
-    if value.kind == "tuple":
-        return "(" + ", ".join(display_scalar(v, missing_label) for v in value.value) + ")"
-    return str(value.value)
+        label = repr(value.value)
+    elif value.kind == "integer":
+        label = value.value
+    elif value.kind == "float":
+        label = value.value if value.value in {"inf", "-inf"} else repr(float.fromhex(value.value))
+    elif value.kind == "boolean":
+        label = "True" if value.value else "False"
+    elif value.kind == "tuple":
+        items = ", ".join(display_scalar(v, missing_label) for v in value.value)
+        label = "(" + items + ("," if len(value.value) == 1 else "") + ")"
+    elif value.kind == "timedelta":
+        label = f"timedelta({value.value} ns)"
+    else:
+        label = str(value.value)
+    return f"{value.kind}({label})" if label == missing_label else label
 
 
 def validate_frame(df: pd.DataFrame) -> None:
