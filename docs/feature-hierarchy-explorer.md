@@ -199,6 +199,17 @@ sections carry the original population accounting and cohort lineage into it.
 
 ## Graphical outputs
 
+For a runnable tour, open the
+[hands-on notebook](../examples/feature-hierarchy-explorer.ipynb) and run all cells.
+It contains saved full/topology SVG figures, isolated interactive HTML previews,
+and examples of equivalent keys, shared assignments, multiple parents, missingness
+scopes, contextual pair matrices, and joint-count budget guards. Section 10 is an
+editable playground for `render_svg()`, `render_html()`, and `visualization_data()`;
+the selected-pair section demonstrates `joint_counts()` separately. Every HTML
+preview is also exported to the temporary directory printed during setup.
+The notebook contains unrestricted evidence; share an individual topology export
+rather than the whole notebook when counts must remain internal.
+
 `render_svg()` produces a standalone static figure; `render_html()` produces a
 standalone interactive document. Both accept an `ExplorerResult` or its dictionary
 and require no optional packages, Graphviz executable, remote assets, or running

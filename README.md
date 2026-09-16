@@ -119,6 +119,18 @@ See the [feature hierarchy explorer guide](docs/feature-hierarchy-explorer.md),
 the [hands-on review notebook](examples/feature-hierarchy-explorer.ipynb), and
 the [implementation plan](docs/feature-hierarchy-explorer-plan.md).
 
+The notebook includes executed SVG figures, interactive HTML previews, and an
+editable graphical playground covering all four new presentation APIs. Run it
+from the repository root with:
+
+```bash
+uv run --group dev --with jupyterlab jupyter lab examples/feature-hierarchy-explorer.ipynb
+```
+
+Run all cells first, then edit the playground's section, keys, disclosure mode,
+view, and output limits. Interactive previews also save standalone HTML files in
+a fresh temporary output directory if the notebook viewer blocks JavaScript.
+
 ## Requirements
 
 - Python 3.11+
